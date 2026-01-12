@@ -38,7 +38,7 @@ jobs:
           }
           Copy-Item -Force -LiteralPath $zip.FullName -Destination "MitigationPolice.zip"
 
-      - name: Update release (tag: latest)
+      - name: "Update release (tag: latest)"
         uses: ncipollo/release-action@v1
         with:
           tag: latest
