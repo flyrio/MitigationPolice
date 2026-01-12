@@ -2,8 +2,9 @@ name: Publish latest ZIP
 
 on:
   push:
-    branches: ["main"]
-  workflow_dispatch:
+    branches:
+      - main
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -46,4 +47,3 @@ jobs:
           replacesArtifacts: true
           artifacts: MitigationPolice.zip
           token: ${{ secrets.GITHUB_TOKEN }}
-
