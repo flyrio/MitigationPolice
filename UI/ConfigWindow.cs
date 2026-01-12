@@ -101,9 +101,18 @@ public sealed class ConfigWindow : Window {
         }
 
         var allowSend = plugin.Configuration.AllowSendingToPartyChat;
-        if (ImGui.Checkbox("允许发送到小队频道（仅手动按钮触发）", ref allowSend)) {
+        if (ImGui.Checkbox("允许发送到小队频道（手动发送/自动通报均需开启）", ref allowSend)) {
             plugin.Configuration.AllowSendingToPartyChat = allowSend;
             plugin.Configuration.Save();
+        }
+
+        var autoAnnounce = plugin.Configuration.AutoAnnounceOverwritesToPartyChat;
+        if (ImGui.Checkbox("自动通报：发生冲突减伤（顶掉/覆盖）时发送到小队频道", ref autoAnnounce)) {
+            plugin.Configuration.AutoAnnounceOverwritesToPartyChat = autoAnnounce;
+            plugin.Configuration.Save();
+        }
+        if (autoAnnounce && !plugin.Configuration.AllowSendingToPartyChat) {
+            ImGui.TextDisabled("提示：需先开启“允许发送到小队频道”，否则自动通报不会发送。");
         }
     }
 

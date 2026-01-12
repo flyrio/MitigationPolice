@@ -6,6 +6,7 @@ using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Lumina.Excel.Sheets;
+using MitigationPolice.Chat;
 using MitigationPolice.Models;
 using ActionSheet = Lumina.Excel.Sheets.Action;
 
@@ -30,10 +31,14 @@ public sealed class MitigationState {
     private readonly Dictionary<ActiveGroupKey, ActiveEffect> activeByGroupKey = new();
     private readonly Dictionary<OwnerKey, OwnerLastUse> lastUseByOwner = new();
     private readonly List<MitigationOverwrite> overwrites = new();
+    private readonly Queue<string> pendingOverwriteAnnouncements = new();
+    private DateTime lastAutoAnnounceUtc = DateTime.MinValue;
 
     private const int MaxOverwriteRecords = 5000;
     private readonly TimeSpan overwriteRetention = TimeSpan.FromMinutes(20);
     private readonly TimeSpan overwriteLookback = TimeSpan.FromSeconds(45);
+    private readonly TimeSpan autoAnnounceInterval = TimeSpan.FromSeconds(1);
+    private const int MaxPendingOverwriteAnnouncements = 50;
 
     private const string ConflictGroupPhysRangedPartyMitigation = "phys_ranged_party_mitigation";
 
@@ -118,6 +123,7 @@ public sealed class MitigationState {
         }
 
         PruneExpired(nowUtc);
+        FlushOverwriteAnnouncements(nowUtc);
     }
 
     public void ReloadFromConfig() {
@@ -195,6 +201,9 @@ public sealed class MitigationState {
 
         var casterLevel = ResolvePartyMemberLevel(casterId);
         var nowOffset = new DateTimeOffset(nowUtc, TimeSpan.Zero);
+        var shouldAutoAnnounce = plugin.Configuration.AllowSendingToPartyChat &&
+                                 plugin.Configuration.AutoAnnounceOverwritesToPartyChat;
+        List<MitigationOverwrite>? newlyDetectedOverwrites = null;
 
         foreach (var def in defs) {
             if (!IsEligibleJob(casterId, def)) {
@@ -230,7 +239,7 @@ public sealed class MitigationState {
 
                     if (activeByGroupKey.TryGetValue(key, out var existing) &&
                         existing.ExpiresUtc > nowUtc) {
-                        overwrites.Add(new MitigationOverwrite {
+                        var overwrite = new MitigationOverwrite {
                             TimestampUtc = nowOffset,
                             AppliedActorId = appliedActorId,
                             AppliedActorName = ResolvePartyMemberNameLocked(appliedActorId),
@@ -245,13 +254,23 @@ public sealed class MitigationState {
                             NewCasterId = casterId,
                             NewCasterName = casterName,
                             NewDurationSeconds = durationSeconds,
-                        });
+                        };
+                        overwrites.Add(overwrite);
                         PruneOverwritesLocked(nowUtc);
+
+                        if (shouldAutoAnnounce && !IsRefreshOverwrite(overwrite)) {
+                            newlyDetectedOverwrites ??= new List<MitigationOverwrite>();
+                            newlyDetectedOverwrites.Add(overwrite);
+                        }
                     }
 
                     activeByGroupKey[key] = new ActiveEffect(def.Id, mitigationName, iconActionId, casterId, casterName, expiresUtc);
                 }
             }
+        }
+
+        if (newlyDetectedOverwrites != null && newlyDetectedOverwrites.Count > 0) {
+            EnqueueOverwriteAnnouncement(newlyDetectedOverwrites);
         }
     }
 
@@ -601,7 +620,146 @@ public sealed class MitigationState {
             activeByGroupKey.Clear();
             lastUseByOwner.Clear();
             overwrites.Clear();
+            pendingOverwriteAnnouncements.Clear();
         }
+        lastAutoAnnounceUtc = DateTime.MinValue;
+    }
+
+    private void EnqueueOverwriteAnnouncement(IReadOnlyList<MitigationOverwrite> newlyDetectedOverwrites) {
+        if (!plugin.Configuration.AllowSendingToPartyChat ||
+            !plugin.Configuration.AutoAnnounceOverwritesToPartyChat) {
+            return;
+        }
+
+        var message = BuildOverwriteAnnouncementMessage(newlyDetectedOverwrites);
+        if (string.IsNullOrWhiteSpace(message)) {
+            return;
+        }
+
+        lock (gate) {
+            while (pendingOverwriteAnnouncements.Count >= MaxPendingOverwriteAnnouncements) {
+                pendingOverwriteAnnouncements.Dequeue();
+            }
+
+            pendingOverwriteAnnouncements.Enqueue(message);
+        }
+    }
+
+    private void FlushOverwriteAnnouncements(DateTime nowUtc) {
+        if (!plugin.Configuration.AllowSendingToPartyChat ||
+            !plugin.Configuration.AutoAnnounceOverwritesToPartyChat ||
+            !HasPartyMembersBesidesSelf()) {
+            lock (gate) {
+                pendingOverwriteAnnouncements.Clear();
+            }
+            return;
+        }
+
+        if (nowUtc - lastAutoAnnounceUtc < autoAnnounceInterval) {
+            return;
+        }
+
+        string? message = null;
+        lock (gate) {
+            if (pendingOverwriteAnnouncements.Count > 0) {
+                message = pendingOverwriteAnnouncements.Dequeue();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(message)) {
+            return;
+        }
+
+        if (plugin.ChatSender.TrySendPartyMessage(message, out var error)) {
+            lastAutoAnnounceUtc = nowUtc;
+            return;
+        }
+
+        lastAutoAnnounceUtc = nowUtc;
+        Service.PluginLog.Warning(string.IsNullOrWhiteSpace(error)
+            ? "自动通报发送失败：未知错误"
+            : $"自动通报发送失败：{error}");
+    }
+
+    private static bool HasPartyMembersBesidesSelf() {
+        var local = Service.ObjectTable.LocalPlayer;
+        if (local == null) {
+            return false;
+        }
+
+        for (var i = 0; i < Service.PartyList.Length; i++) {
+            var member = Service.PartyList[i];
+            if (member?.EntityId is not { } id || id == 0) {
+                continue;
+            }
+
+            if (id != local.EntityId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildOverwriteAnnouncementMessage(IReadOnlyList<MitigationOverwrite> newlyDetectedOverwrites) {
+        var grouped = newlyDetectedOverwrites
+            .Where(o => !IsRefreshOverwrite(o))
+            .GroupBy(o => new OverwriteAnnounceKey(o.ConflictGroupId, o.OldMitigationId, o.OldCasterId, o.NewMitigationId, o.NewCasterId))
+            .Select(g => new {
+                Representative = g.OrderByDescending(x => x.OldRemainingSeconds).First(),
+                Count = g.Select(x => x.AppliedActorId).Distinct().Count(),
+            })
+            .OrderByDescending(x => x.Representative.OldRemainingSeconds)
+            .ThenByDescending(x => x.Count)
+            .ToList();
+
+        if (grouped.Count == 0) {
+            return string.Empty;
+        }
+
+        const int maxParts = 2;
+        var parts = grouped
+            .Take(maxParts)
+            .Select(x => FormatOverwriteAnnouncementPart(x.Representative, x.Count))
+            .ToList();
+
+        var extra = grouped.Count - parts.Count;
+        var message = extra > 0
+            ? $"顶减伤：{string.Join(" ", parts)} …+{extra}"
+            : $"顶减伤：{string.Join(" ", parts)}";
+
+        return Utf8Util.Truncate(message, 480);
+    }
+
+    private static bool IsRefreshOverwrite(MitigationOverwrite overwrite) {
+        return overwrite.OldCasterId == overwrite.NewCasterId &&
+               string.Equals(overwrite.OldMitigationId, overwrite.NewMitigationId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatOverwriteAnnouncementPart(MitigationOverwrite overwrite, int affectedTargetCount) {
+        var newCaster = string.IsNullOrWhiteSpace(overwrite.NewCasterName) ? "?" : overwrite.NewCasterName;
+        var oldCaster = string.IsNullOrWhiteSpace(overwrite.OldCasterName) ? "?" : overwrite.OldCasterName;
+        var remaining = FormatSeconds(overwrite.OldRemainingSeconds);
+
+        var part = $"{overwrite.NewMitigationName}@{newCaster}顶{overwrite.OldMitigationName}@{oldCaster}(旧剩{remaining})";
+        if (affectedTargetCount > 1) {
+            part += $"x{affectedTargetCount}";
+        }
+
+        return part;
+    }
+
+    private static string FormatSeconds(float seconds) {
+        if (seconds < 0) {
+            seconds = 0;
+        }
+
+        var ts = TimeSpan.FromSeconds(seconds);
+        if (ts.TotalMinutes >= 1) {
+            return $"{(int)ts.TotalMinutes}m{ts.Seconds:D2}s";
+        }
+
+        return $"{(int)Math.Round(ts.TotalSeconds)}s";
     }
 
     private static float ResolveDurationSeconds(MitigationDefinition def, uint actionId, int casterLevel) {
@@ -645,6 +803,8 @@ public sealed class MitigationState {
     private readonly record struct OwnerLastUse(DateTime LastUsedUtc, uint ActionId, int LevelAtUse);
 
     private readonly record struct ActiveEffect(string MitigationId, string MitigationName, uint IconActionId, uint CasterId, string CasterName, DateTime ExpiresUtc);
+
+    private readonly record struct OverwriteAnnounceKey(string ConflictGroupId, string OldMitigationId, uint OldCasterId, string NewMitigationId, uint NewCasterId);
 
     public readonly record struct DutyContext(uint TerritoryId, string TerritoryName, uint? ContentId, string? ContentName);
 
