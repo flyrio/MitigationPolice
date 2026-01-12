@@ -16,26 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-
-      - name: Restore
-        run: dotnet restore --locked-mode
-
-      - name: Build (Release)
-        run: dotnet build -c Release --no-restore
-
-      - name: Prepare ZIP asset
+      - name: Create ZIP
         shell: pwsh
         run: |
-          $zip = Get-ChildItem -Path "bin/Release" -Recurse -File -Filter "latest.zip" -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if ($null -eq $zip) {
-            throw "latest.zip not found under bin/Release"
-          }
-          Copy-Item -Force -LiteralPath $zip.FullName -Destination "MitigationPolice.zip"
+          git archive --format=zip --output "MitigationPolice.zip" HEAD
 
       - name: "Update release (tag: latest)"
         uses: ncipollo/release-action@v1
