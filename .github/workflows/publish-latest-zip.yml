@@ -12,14 +12,46 @@ permissions:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    env:
+      DALAMUD_HOME: ${{ github.workspace }}\\vendor\\dalamud
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create ZIP
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build (Release)
+        run: dotnet build -c Release --no-restore
+
+      - name: Prepare ZIP asset
         shell: pwsh
         run: |
-          git archive --format=zip --output "MitigationPolice.zip" HEAD
+          $zip = Get-ChildItem -Path "bin" -Recurse -File -Filter "latest.zip" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $zip) {
+            throw "latest.zip not found under bin/"
+          }
+
+          Copy-Item -Force -LiteralPath $zip.FullName -Destination "MitigationPolice.zip"
+
+          $tmp = Join-Path $env:RUNNER_TEMP "MitigationPolice_zip_check"
+          if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -Recurse -Force -LiteralPath $tmp
+          }
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          Expand-Archive -Force -LiteralPath "MitigationPolice.zip" -DestinationPath $tmp
+          if (-not (Test-Path -LiteralPath (Join-Path $tmp "MitigationPolice.dll"))) {
+            throw "MitigationPolice.dll not found inside MitigationPolice.zip"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $tmp "MitigationPolice.json"))) {
+            throw "MitigationPolice.json not found inside MitigationPolice.zip"
+          }
 
       - name: "Update release (tag: latest)"
         uses: ncipollo/release-action@v1
