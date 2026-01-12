@@ -1,0 +1,49 @@
+name: Publish latest ZIP
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+          include-prerelease: true
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build (Release)
+        run: dotnet build -c Release --no-restore
+
+      - name: Prepare ZIP asset
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path "bin/Release" -Recurse -File -Filter "latest.zip" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $zip) {
+            throw "latest.zip not found under bin/Release"
+          }
+          Copy-Item -Force -LiteralPath $zip.FullName -Destination "MitigationPolice.zip"
+
+      - name: Update release (tag: latest)
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: Latest
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: MitigationPolice.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
+

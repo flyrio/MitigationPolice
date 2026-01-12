@@ -12,7 +12,7 @@
     <None Update="MitigationPolice.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="..\\assets\\icon.png">
+    <None Include="assets\\icon.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <TargetPath>icon.png</TargetPath>
     </None>
