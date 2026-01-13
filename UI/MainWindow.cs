@@ -37,7 +37,7 @@ public sealed class MainWindow : Window {
         Personal,
     }
 
-    public MainWindow(MitigationPolicePlugin plugin) : base("减伤警察") {
+    public MainWindow(MitigationPolicePlugin plugin) : base("减伤巡查") {
         this.plugin = plugin;
         SizeConstraints = new WindowSizeConstraints {
             MinimumSize = new Vector2(900, 500),
@@ -158,7 +158,7 @@ public sealed class MainWindow : Window {
         ImGui.SameLine();
         ImGui.SetNextItemWidth(150);
         var modeLabel = policeMode == PoliceMode.Team ? "团队减伤" : "个人减伤";
-        if (ImGui.BeginCombo("警察模式", modeLabel)) {
+        if (ImGui.BeginCombo("巡查模式", modeLabel)) {
             if (ImGui.Selectable("团队减伤", policeMode == PoliceMode.Team)) {
                 policeMode = PoliceMode.Team;
                 selectedMechanic = null;

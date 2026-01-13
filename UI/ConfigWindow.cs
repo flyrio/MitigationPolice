@@ -30,7 +30,7 @@ public sealed class ConfigWindow : Window {
     private string overwriteAutoAnnouncePreview = string.Empty;
     private DateTime lastAutoAnnouncePreviewUtc = DateTime.MinValue;
 
-    public ConfigWindow(MitigationPolicePlugin plugin) : base("减伤警察 - 设置") {
+    public ConfigWindow(MitigationPolicePlugin plugin) : base("减伤巡查 - 设置") {
         this.plugin = plugin;
         SizeConstraints = new WindowSizeConstraints {
             MinimumSize = new Vector2(720, 500),
@@ -142,7 +142,7 @@ public sealed class ConfigWindow : Window {
         }
 
         var autoAnnounceDeath = plugin.Configuration.AutoAnnounceDeathsToPartyChat;
-        if (ImGui.Checkbox("自动通报：有人死亡时播报减伤警察信息", ref autoAnnounceDeath)) {
+        if (ImGui.Checkbox("自动通报：有人死亡时播报减伤巡查信息", ref autoAnnounceDeath)) {
             plugin.Configuration.AutoAnnounceDeathsToPartyChat = autoAnnounceDeath;
             plugin.Configuration.Save();
         }

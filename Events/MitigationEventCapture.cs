@@ -50,6 +50,10 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     private readonly TimeSpan deathDedupWindow = TimeSpan.FromSeconds(2);
     private readonly TimeSpan fatalLookbackWindow = TimeSpan.FromSeconds(3);
 
+    private readonly object recentDamageGate = new();
+    private readonly Dictionary<uint, DamageEventRecord> recentDamageByTarget = new();
+    private readonly TimeSpan recentDamageRetention = TimeSpan.FromSeconds(8);
+
     private readonly object deathAnnounceGate = new();
     private readonly Queue<DeathAnnounceRequest> pendingDeathAnnounces = new();
     private const int MaxPendingDeathAnnounces = 20;
@@ -127,14 +131,12 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
 
             var nowUtc = DateTime.UtcNow;
             var inCombat = Service.Condition[ConditionFlag.InCombat];
-            if (actionId == 0) {
-                return;
-            }
+            var recordActionId = actionId == 0 ? null : (uint?)actionId;
 
             var sourceId = casterEntityId == 0 ? null : (uint?)casterEntityId;
             var sourceName = ResolveSourceName(casterPtr, sourceId);
 
-            if (sourceId.HasValue && plugin.MitigationState.IsMitigationTriggerAction(actionId)) {
+            if (actionId != 0 && sourceId.HasValue && plugin.MitigationState.IsMitigationTriggerAction(actionId)) {
                 var recordCasterId = sourceId.Value;
                 var recordCasterName = sourceName ?? string.Empty;
 
@@ -175,21 +177,21 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
                     var targetName = targetActor?.Name.ToString() ?? string.Empty;
                     var targetJob = ResolveJob(targetActor);
 
-                    var actionName = ResolveActionName(actionId);
+                    var actionName = recordActionId.HasValue ? ResolveActionName(recordActionId.Value) : null;
 
-                    if (!inCombat) {
-                        continue;
+                    List<MitigationContribution> active;
+                    List<MissingMitigation> missing;
+                    if (inCombat) {
+                        (active, missing) = plugin.MitigationState.AnalyzeHit(nowUtc, actionTargetId, sourceId, recordActionId, amount);
+                        if (missing.Count > 0) {
+                            missing.Sort(CompareMissingMitigations);
+                        }
+                    } else {
+                        active = plugin.MitigationState.GetActiveMitigationsForHit(nowUtc, actionTargetId, sourceId);
+                        missing = new List<MissingMitigation>();
                     }
 
-                    plugin.MitigationState.EnsureCombatStart(nowUtc);
-                    plugin.EventStore.BeginCombatSession(duty, nowUtc);
-
-                    var (active, missing) = plugin.MitigationState.AnalyzeHit(nowUtc, actionTargetId, sourceId, actionId, amount);
-                    if (missing.Count > 0) {
-                        missing.Sort(CompareMissingMitigations);
-                    }
-
-                    plugin.EventStore.AddToActiveSession(new DamageEventRecord {
+                    var record = new DamageEventRecord {
                         TimestampUtc = new DateTimeOffset(nowUtc, TimeSpan.Zero),
                         TerritoryId = duty.TerritoryId,
                         TerritoryName = duty.TerritoryName,
@@ -200,7 +202,7 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
                         TargetJob = targetJob,
                         SourceId = sourceId,
                         SourceName = sourceName,
-                        ActionId = actionId,
+                        ActionId = recordActionId,
                         ActionName = actionName,
                         DamageAmount = amount,
                         DamageType = damageType,
@@ -208,7 +210,17 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
                         TargetShieldBefore = preVitalsByTarget != null && preVitalsByTarget.TryGetValue(actionTargetId, out vitals) ? vitals.ShieldBefore : 0,
                         ActiveMitigations = active,
                         MissingMitigations = missing,
-                    });
+                    };
+
+                    RememberRecentDamage(record, nowUtc);
+
+                    if (!inCombat) {
+                        continue;
+                    }
+
+                    plugin.MitigationState.EnsureCombatStart(nowUtc);
+                    plugin.EventStore.BeginCombatSession(duty, nowUtc);
+                    plugin.EventStore.AddToActiveSession(record);
                 }
             }
         } catch (Exception ex) {
@@ -364,28 +376,19 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     }
 
     private List<string> BuildDeathAnnouncementLines(uint targetId, DateTime nowUtc) {
-        var sessionId = plugin.EventStore.ActiveSessionId;
         var nowOffset = new DateTimeOffset(nowUtc, TimeSpan.Zero);
 
         DamageEventRecord? record = null;
+        var sessionId = plugin.EventStore.ActiveSessionId ?? plugin.EventStore.GetMostRecentSessionId();
         if (sessionId.HasValue) {
-            var events = plugin.EventStore.GetSessionEventsSnapshot(sessionId.Value);
-            for (var i = events.Count - 1; i >= 0; i--) {
-                var e = events[i];
-                if (nowOffset - e.TimestampUtc > fatalLookbackWindow) {
-                    break;
-                }
-
-                if (e.TargetId == targetId) {
-                    record = e;
-                    break;
-                }
-            }
+            record = FindLatestDamageForTargetInSession(sessionId.Value, targetId, nowOffset);
         }
+
+        record ??= TryGetRecentDamage(targetId, nowOffset);
 
         if (record == null) {
             var name = ResolveObjectName(targetId) ?? targetId.ToString();
-            var text = $"减伤警察：{name} 死亡（未找到对应受伤事件）";
+            var text = $"减伤巡查：{name} 死亡（未捕获对应受伤事件，可能为即死/坠落/状态判定）";
             return new List<string> { Utf8Util.Truncate(text, 480) };
         }
 
@@ -405,6 +408,58 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
             lineOut = prefix + lineOut;
         }
         return new List<string> { Utf8Util.Truncate(lineOut, 480) };
+    }
+
+    private DamageEventRecord? FindLatestDamageForTargetInSession(Guid sessionId, uint targetId, DateTimeOffset nowOffset) {
+        var events = plugin.EventStore.GetSessionEventsSnapshot(sessionId);
+        for (var i = events.Count - 1; i >= 0; i--) {
+            var e = events[i];
+            if (nowOffset - e.TimestampUtc > fatalLookbackWindow) {
+                break;
+            }
+
+            if (e.TargetId == targetId) {
+                return e;
+            }
+        }
+
+        return null;
+    }
+
+    private void RememberRecentDamage(DamageEventRecord record, DateTime nowUtc) {
+        lock (recentDamageGate) {
+            recentDamageByTarget[record.TargetId] = record;
+
+            if (recentDamageByTarget.Count == 0) {
+                return;
+            }
+
+            var cutoff = nowUtc - recentDamageRetention;
+            var removeKeys = new List<uint>();
+            foreach (var (key, value) in recentDamageByTarget) {
+                if (value.TimestampUtc.UtcDateTime < cutoff) {
+                    removeKeys.Add(key);
+                }
+            }
+
+            foreach (var key in removeKeys) {
+                recentDamageByTarget.Remove(key);
+            }
+        }
+    }
+
+    private DamageEventRecord? TryGetRecentDamage(uint targetId, DateTimeOffset nowOffset) {
+        lock (recentDamageGate) {
+            if (!recentDamageByTarget.TryGetValue(targetId, out var record)) {
+                return null;
+            }
+
+            if (nowOffset - record.TimestampUtc > recentDamageRetention) {
+                return null;
+            }
+
+            return record;
+        }
     }
 
     private static bool HasPartyMembersBesidesSelf() {

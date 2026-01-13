@@ -1,4 +1,4 @@
-// 本文件是减伤警察插件入口，负责初始化服务、窗口、事件捕获与命令注册。
+// 本文件是减伤巡查插件入口，负责初始化服务、窗口、事件捕获与命令注册。
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -45,7 +45,7 @@ public sealed class MitigationPolicePlugin : IDalamudPlugin {
         pluginInterface.UiBuilder.OpenConfigUi += () => ConfigWindow.Toggle();
 
         var commandInfo = new CommandInfo((_, _) => MainWindow.Toggle()) {
-            HelpMessage = "打开/关闭 减伤警察 主界面",
+            HelpMessage = "打开/关闭 减伤巡查 主界面",
         };
         Service.CommandManager.AddHandler(CommandName, commandInfo);
     }

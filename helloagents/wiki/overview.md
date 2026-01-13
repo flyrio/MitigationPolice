@@ -1,4 +1,4 @@
-# MitigationPolice（减伤警察）
+# MitigationPolice（减伤巡查）
 
 > 本文件包含项目级别的核心信息。详细的模块文档见 `modules/` 目录。
 

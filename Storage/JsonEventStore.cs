@@ -190,13 +190,13 @@ public sealed class JsonEventStore : IDisposable {
     public bool TryMarkLatestFatal(uint targetId, DateTime nowUtc, TimeSpan lookback) {
         var nowOffset = new DateTimeOffset(nowUtc, TimeSpan.Zero);
         lock (gate) {
-            var active = sessions.LastOrDefault(s => s.EndUtc == null);
-            if (active == null || active.Events.Count == 0) {
+            var session = sessions.LastOrDefault(s => s.EndUtc == null) ?? sessions.LastOrDefault();
+            if (session == null || session.Events.Count == 0) {
                 return false;
             }
 
-            for (var i = active.Events.Count - 1; i >= 0; i--) {
-                var e = active.Events[i];
+            for (var i = session.Events.Count - 1; i >= 0; i--) {
+                var e = session.Events[i];
                 if (e.TargetId != targetId) {
                     continue;
                 }

@@ -173,6 +173,50 @@ public sealed class MitigationState {
         }
     }
 
+    public List<MitigationContribution> GetActiveMitigationsForHit(DateTime nowUtc, uint targetId, uint? sourceId) {
+        var defs = plugin.Configuration.Mitigations.Where(d => d.Enabled).ToList();
+        var keys = new HashSet<ActiveGroupKey>();
+
+        foreach (var def in defs) {
+            if (!ShouldAnalyze(def)) {
+                continue;
+            }
+
+            if (def.ApplyTo == MitigationApplyTo.Source && !sourceId.HasValue) {
+                continue;
+            }
+
+            var appliedActorId = def.ApplyTo switch {
+                MitigationApplyTo.Target => (uint?)targetId,
+                MitigationApplyTo.Source => sourceId,
+                _ => null,
+            };
+            if (!appliedActorId.HasValue) {
+                continue;
+            }
+
+            keys.Add(new ActiveGroupKey(ResolveConflictGroupId(def), appliedActorId.Value));
+        }
+
+        var active = new List<MitigationContribution>();
+        foreach (var key in keys) {
+            if (!TryGetActiveEffect(key, nowUtc, out var effect)) {
+                continue;
+            }
+
+            active.Add(new MitigationContribution {
+                MitigationId = effect.MitigationId,
+                MitigationName = effect.MitigationName,
+                IconActionId = effect.IconActionId,
+                CasterId = effect.CasterId,
+                CasterName = effect.CasterName,
+                RemainingSeconds = (float)(effect.ExpiresUtc - nowUtc).TotalSeconds,
+            });
+        }
+
+        return active;
+    }
+
     public bool IsTrackedActor(uint entityId) {
         lock (gate) {
             return trackedActorIds.Contains(entityId);
