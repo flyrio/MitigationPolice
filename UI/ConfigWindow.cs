@@ -5,6 +5,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using MitigationPolice.Chat;
 using MitigationPolice.Mitigations;
 using ActionSheet = Lumina.Excel.Sheets.Action;
 using MitigationPolice.Models;
@@ -23,6 +24,11 @@ public sealed class ConfigWindow : Window {
     private readonly List<JobIds> newMitigationJobs = new();
 
     private readonly Dictionary<string, string> triggerTextById = new();
+
+    private bool autoAnnouncePreviewInitialized;
+    private string deathAutoAnnouncePreview = string.Empty;
+    private string overwriteAutoAnnouncePreview = string.Empty;
+    private DateTime lastAutoAnnouncePreviewUtc = DateTime.MinValue;
 
     public ConfigWindow(MitigationPolicePlugin plugin) : base("减伤警察 - 设置") {
         this.plugin = plugin;
@@ -58,12 +64,24 @@ public sealed class ConfigWindow : Window {
     }
 
     private void DrawGeneralSettings() {
+        ImGui.Text("功能说明");
+        ImGui.BulletText("复盘：按战斗会话记录队伍受伤事件");
+        ImGui.BulletText("分析：命中生效减伤 / 缺失减伤 / 已放未覆盖 / 顶减伤");
+        ImGui.BulletText("手动：主界面可复制与播报（默认仅默语，可选同步小队）");
+        ImGui.BulletText("自动：死亡/顶减伤可自动通报（默认关闭）");
+        ImGui.Separator();
+
+        ImGui.Text("捕获范围");
+        ImGui.TextDisabled("仅记录战斗中队伍成员的受伤事件；脱战后会保存为一场战斗记录。");
         var trackOnlyInInstances = plugin.Configuration.TrackOnlyInInstances;
         if (ImGui.Checkbox("仅副本内捕获", ref trackOnlyInInstances)) {
             plugin.Configuration.TrackOnlyInInstances = trackOnlyInInstances;
             SaveAndReload();
         }
 
+        ImGui.Separator();
+        ImGui.Text("追责范围");
+        ImGui.TextDisabled("决定“缺失减伤”统计包含哪些类型（未到学会等级/等级同步不足会自动不追责）。");
         var includePersonal = plugin.Configuration.IncludePersonalMitigations;
         if (ImGui.Checkbox("追责：个人减伤", ref includePersonal)) {
             plugin.Configuration.IncludePersonalMitigations = includePersonal;
@@ -82,6 +100,9 @@ public sealed class ConfigWindow : Window {
             SaveAndReload();
         }
 
+        ImGui.Separator();
+        ImGui.Text("追责规则");
+        ImGui.TextDisabled("“开场未交/转好未交/已放未覆盖”等判断会结合战斗开始时间与技能冷却推算。");
         var assumeReady = plugin.Configuration.AssumeReadyAtDutyStart;
         if (ImGui.Checkbox("默认视为开战时已转好（用于“开场未交”）", ref assumeReady)) {
             plugin.Configuration.AssumeReadyAtDutyStart = assumeReady;
@@ -94,17 +115,25 @@ public sealed class ConfigWindow : Window {
             SaveAndReload();
         }
 
+        ImGui.Separator();
+        ImGui.Text("数据存储");
+        ImGui.TextDisabled("仅影响本地保存的战斗事件数量（越大占用越高）。");
         var maxEvents = plugin.Configuration.MaxStoredEvents;
         if (ImGui.InputInt("最大保存事件数（超出将移除最早战斗）", ref maxEvents)) {
             plugin.Configuration.MaxStoredEvents = Math.Clamp(maxEvents, 100, 200_000);
             plugin.Configuration.Save();
         }
 
+        ImGui.Separator();
+        ImGui.Text("通报与频道");
+        ImGui.TextDisabled("自动通报默认关闭；开启前建议先看下方预览，避免刷屏。");
         var allowSend = plugin.Configuration.AllowSendingToPartyChat;
         if (ImGui.Checkbox("同时发送到小队频道（默认仅默语）", ref allowSend)) {
             plugin.Configuration.AllowSendingToPartyChat = allowSend;
             plugin.Configuration.Save();
         }
+
+        ImGui.TextDisabled("提示：默认所有播报/通报只发默语(/e)；勾选上方开关后会额外发小队(/p)。");
 
         var autoAnnounce = plugin.Configuration.AutoAnnounceOverwritesToPartyChat;
         if (ImGui.Checkbox("自动通报：发生冲突减伤（顶掉/覆盖）时播报", ref autoAnnounce)) {
@@ -125,10 +154,121 @@ public sealed class ConfigWindow : Window {
                 ImGui.TextDisabled("提示：已开启同步到小队频道，注意可能刷屏。");
             }
         }
+
+        DrawAutoAnnouncePreview();
+    }
+
+    private void DrawAutoAnnouncePreview() {
+        ImGui.Separator();
+        ImGui.Text("自动通报预览");
+        ImGui.TextDisabled("预览会尝试读取最近一次记录（致死/顶减伤）；没有对应记录时会显示示例。");
+
+        if (!autoAnnouncePreviewInitialized) {
+            autoAnnouncePreviewInitialized = true;
+            RefreshAutoAnnouncePreview();
+        }
+
+        if (ImGui.Button("刷新预览")) {
+            RefreshAutoAnnouncePreview();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("使用示例")) {
+            SetSampleAutoAnnouncePreview();
+        }
+
+        if (lastAutoAnnouncePreviewUtc != DateTime.MinValue) {
+            ImGui.SameLine();
+            ImGui.TextDisabled($"更新时间：{lastAutoAnnouncePreviewUtc.ToLocalTime():HH:mm:ss}");
+        }
+
+        ImGui.TextDisabled("死亡自动通报：");
+        ImGui.BeginChild("##mp_auto_death_preview", new Vector2(0, 65), true, ImGuiWindowFlags.AlwaysVerticalScrollbar | ImGuiWindowFlags.HorizontalScrollbar);
+        ImGui.TextUnformatted(deathAutoAnnouncePreview);
+        ImGui.EndChild();
+
+        ImGui.TextDisabled("顶减伤自动通报：");
+        ImGui.BeginChild("##mp_auto_overwrite_preview", new Vector2(0, 65), true, ImGuiWindowFlags.AlwaysVerticalScrollbar | ImGuiWindowFlags.HorizontalScrollbar);
+        ImGui.TextUnformatted(overwriteAutoAnnouncePreview);
+        ImGui.EndChild();
+    }
+
+    private void RefreshAutoAnnouncePreview() {
+        SetSampleAutoAnnouncePreview();
+
+        var sessionId = plugin.EventStore.ActiveSessionId ?? plugin.EventStore.GetMostRecentSessionId();
+        if (!sessionId.HasValue) {
+            lastAutoAnnouncePreviewUtc = DateTime.UtcNow;
+            return;
+        }
+
+        var summary = plugin.EventStore.TryGetSummary(sessionId.Value);
+        var sessionStartUtc = summary?.StartUtc ?? DateTimeOffset.UtcNow;
+
+        var events = plugin.EventStore.GetSessionEventsSnapshot(sessionId.Value);
+        if (events.Count == 0) {
+            lastAutoAnnouncePreviewUtc = DateTime.UtcNow;
+            return;
+        }
+
+        for (var i = events.Count - 1; i >= 0; i--) {
+            var record = events[i];
+            if (!record.IsFatal) {
+                continue;
+            }
+
+            var prefix = $"[T+{FormatShareOffsetSeconds((record.TimestampUtc - sessionStartUtc).TotalSeconds)}] ";
+            deathAutoAnnouncePreview = Utf8Util.Truncate(prefix + ShareFormatter.BuildDeathPoliceTipLine(record), 480);
+            break;
+        }
+
+        for (var i = events.Count - 1; i >= 0; i--) {
+            var list = plugin.MitigationState.GetOverwritesForEvent(events[i]);
+            if (list.Count == 0) {
+                continue;
+            }
+
+            var batch = TakeLatestOverwriteBatch(list);
+            var message = AutoAnnounceFormatter.BuildOverwriteAnnouncementMessage(batch);
+            if (!string.IsNullOrWhiteSpace(message)) {
+                overwriteAutoAnnouncePreview = message;
+                break;
+            }
+        }
+
+        lastAutoAnnouncePreviewUtc = DateTime.UtcNow;
+    }
+
+    private void SetSampleAutoAnnouncePreview() {
+        deathAutoAnnouncePreview = "占星 Yumoki被强风 2629368点魔法伤害做掉了！生前血量：110023，生前盾量：0，致死伤害：2629368，过量：2519345，减伤百分比：19%，状态：怒涛之计 命运之轮";
+        overwriteAutoAnnouncePreview = "顶减伤：雪仇@骑士A顶雪仇@骑士B(旧剩10s)";
+    }
+
+    private static List<MitigationOverwrite> TakeLatestOverwriteBatch(List<MitigationOverwrite> list) {
+        if (list.Count <= 1) {
+            return list;
+        }
+
+        var latestUtc = list.Max(o => o.TimestampUtc.UtcDateTime);
+        var cutoff = latestUtc.AddMilliseconds(-750);
+        return list.Where(o => o.TimestampUtc.UtcDateTime >= cutoff).ToList();
+    }
+
+    private static string FormatShareOffsetSeconds(double seconds) {
+        if (seconds < 0) {
+            seconds = 0;
+        }
+
+        var ts = TimeSpan.FromSeconds(seconds);
+        if (ts.TotalMinutes >= 1) {
+            return $"{(int)ts.TotalMinutes}m{ts.Seconds:D2}s";
+        }
+
+        return $"{Math.Max(0, (int)Math.Round(ts.TotalSeconds))}s";
     }
 
     private void DrawMitigationList() {
         ImGui.Text("减伤清单");
+        ImGui.TextDisabled("该清单用于：命中生效减伤/缺失减伤追责/已放未覆盖/顶掉与互斥判断。可按需禁用或自定义持续/冷却/触发。");
 
         var defs = plugin.Configuration.Mitigations;
         if (defs.Count == 0) {
@@ -260,6 +400,7 @@ public sealed class ConfigWindow : Window {
 
     private void DrawAddMitigation() {
         ImGui.Text("添加减伤（按 Action 搜索）");
+        ImGui.TextDisabled("建议：先在 GarlandTools/灰机上确认 ActionId 与 BuffId，再添加到清单并按需调整“分类/生效/持续/CD/职业”。");
 
         var changed = ImGui.InputText("名称/ID", ref actionSearch, 64);
         ImGui.SameLine();

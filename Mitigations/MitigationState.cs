@@ -275,7 +275,9 @@ public sealed class MitigationState {
                         overwrites.Add(overwrite);
                         PruneOverwritesLocked(nowUtc);
 
-                        if (shouldAutoAnnounce && !IsRefreshOverwrite(overwrite)) {
+                        var isRefresh = overwrite.OldCasterId == overwrite.NewCasterId &&
+                                        string.Equals(overwrite.OldMitigationId, overwrite.NewMitigationId, StringComparison.OrdinalIgnoreCase);
+                        if (shouldAutoAnnounce && !isRefresh) {
                             newlyDetectedOverwrites ??= new List<MitigationOverwrite>();
                             newlyDetectedOverwrites.Add(overwrite);
                         }
@@ -766,7 +768,7 @@ public sealed class MitigationState {
             return;
         }
 
-        var message = BuildOverwriteAnnouncementMessage(newlyDetectedOverwrites);
+        var message = AutoAnnounceFormatter.BuildOverwriteAnnouncementMessage(newlyDetectedOverwrites);
         if (string.IsNullOrWhiteSpace(message)) {
             return;
         }
@@ -840,67 +842,6 @@ public sealed class MitigationState {
         return false;
     }
 
-    private static string BuildOverwriteAnnouncementMessage(IReadOnlyList<MitigationOverwrite> newlyDetectedOverwrites) {
-        var grouped = newlyDetectedOverwrites
-            .Where(o => !IsRefreshOverwrite(o))
-            .GroupBy(o => new OverwriteAnnounceKey(o.ConflictGroupId, o.OldMitigationId, o.OldCasterId, o.NewMitigationId, o.NewCasterId))
-            .Select(g => new {
-                Representative = g.OrderByDescending(x => x.OldRemainingSeconds).First(),
-                Count = g.Select(x => x.AppliedActorId).Distinct().Count(),
-            })
-            .OrderByDescending(x => x.Representative.OldRemainingSeconds)
-            .ThenByDescending(x => x.Count)
-            .ToList();
-
-        if (grouped.Count == 0) {
-            return string.Empty;
-        }
-
-        const int maxParts = 2;
-        var parts = grouped
-            .Take(maxParts)
-            .Select(x => FormatOverwriteAnnouncementPart(x.Representative, x.Count))
-            .ToList();
-
-        var extra = grouped.Count - parts.Count;
-        var message = extra > 0
-            ? $"顶减伤：{string.Join(" ", parts)} …+{extra}"
-            : $"顶减伤：{string.Join(" ", parts)}";
-
-        return Utf8Util.Truncate(message, 480);
-    }
-
-    private static bool IsRefreshOverwrite(MitigationOverwrite overwrite) {
-        return overwrite.OldCasterId == overwrite.NewCasterId &&
-               string.Equals(overwrite.OldMitigationId, overwrite.NewMitigationId, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FormatOverwriteAnnouncementPart(MitigationOverwrite overwrite, int affectedTargetCount) {
-        var newCaster = string.IsNullOrWhiteSpace(overwrite.NewCasterName) ? "?" : overwrite.NewCasterName;
-        var oldCaster = string.IsNullOrWhiteSpace(overwrite.OldCasterName) ? "?" : overwrite.OldCasterName;
-        var remaining = FormatSeconds(overwrite.OldRemainingSeconds);
-
-        var part = $"{overwrite.NewMitigationName}@{newCaster}顶{overwrite.OldMitigationName}@{oldCaster}(旧剩{remaining})";
-        if (affectedTargetCount > 1) {
-            part += $"x{affectedTargetCount}";
-        }
-
-        return part;
-    }
-
-    private static string FormatSeconds(float seconds) {
-        if (seconds < 0) {
-            seconds = 0;
-        }
-
-        var ts = TimeSpan.FromSeconds(seconds);
-        if (ts.TotalMinutes >= 1) {
-            return $"{(int)ts.TotalMinutes}m{ts.Seconds:D2}s";
-        }
-
-        return $"{(int)Math.Round(ts.TotalSeconds)}s";
-    }
-
     private static float ResolveDurationSeconds(MitigationDefinition def, uint actionId, int casterLevel) {
         if (def.DurationSecondsByActionId != null && def.DurationSecondsByActionId.TryGetValue(actionId, out var value)) {
             return value;
@@ -942,8 +883,6 @@ public sealed class MitigationState {
     private readonly record struct OwnerLastUse(DateTime LastUsedUtc, uint ActionId, int LevelAtUse);
 
     private readonly record struct ActiveEffect(string MitigationId, string MitigationName, uint IconActionId, uint CasterId, string CasterName, DateTime ExpiresUtc);
-
-    private readonly record struct OverwriteAnnounceKey(string ConflictGroupId, string OldMitigationId, uint OldCasterId, string NewMitigationId, uint NewCasterId);
 
     public readonly record struct DutyContext(uint TerritoryId, string TerritoryName, uint? ContentId, string? ContentName);
 
