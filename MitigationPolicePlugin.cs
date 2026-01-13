@@ -31,7 +31,7 @@ public sealed class MitigationPolicePlugin : IDalamudPlugin {
         EventStore.Load();
 
         MitigationState = new MitigationState(this);
-        ChatSender = new ChatSender(() => Configuration.AllowSendingToPartyChat);
+        ChatSender = new ChatSender(() => true);
         EventCapture = new MitigationEventCapture(this);
 
         WindowSystem = new WindowSystem("MitigationPolice");

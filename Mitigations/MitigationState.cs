@@ -5,6 +5,7 @@ using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
+using Lumina.Excel;
 using Lumina.Excel.Sheets;
 using MitigationPolice.Chat;
 using MitigationPolice.Models;
@@ -30,6 +31,8 @@ public sealed class MitigationState {
     private readonly Dictionary<uint, List<MitigationDefinition>> definitionsByTriggerAction = new();
     private readonly Dictionary<ActiveGroupKey, ActiveEffect> activeByGroupKey = new();
     private readonly Dictionary<OwnerKey, OwnerLastUse> lastUseByOwner = new();
+    private readonly Dictionary<uint, int> actionLearnLevelCache = new();
+    private readonly Dictionary<string, int> mitigationLearnLevelCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<MitigationOverwrite> overwrites = new();
     private readonly Queue<string> pendingOverwriteAnnouncements = new();
     private DateTime lastAutoAnnounceUtc = DateTime.MinValue;
@@ -129,6 +132,8 @@ public sealed class MitigationState {
     public void ReloadFromConfig() {
         lock (gate) {
             definitionsByTriggerAction.Clear();
+            actionLearnLevelCache.Clear();
+            mitigationLearnLevelCache.Clear();
 
             foreach (var def in plugin.Configuration.Mitigations.Where(m => m.Enabled)) {
                 foreach (var actionId in def.TriggerActionIds.Distinct()) {
@@ -545,6 +550,10 @@ public sealed class MitigationState {
         var key = new OwnerKey(owner.EntityId, def.Id);
         OwnerLastUse lastUse;
 
+        if (!IsMitigationLearned(def, owner)) {
+            return Availability.Unavailable();
+        }
+
         lock (gate) {
             if (!lastUseByOwner.TryGetValue(key, out lastUse)) {
                 if (!plugin.Configuration.AssumeReadyAtDutyStart || combatStartUtc == DateTime.MinValue) {
@@ -566,6 +575,69 @@ public sealed class MitigationState {
         }
 
         return Availability.Available(false, (float)(nowUtc - availableSince).TotalSeconds);
+    }
+
+    private bool IsMitigationLearned(MitigationDefinition def, PartyMemberSnapshot owner) {
+        var requiredLevel = ResolveMitigationLearnLevel(def);
+        if (requiredLevel <= 0) {
+            return true;
+        }
+
+        var level = owner.Level > 0 ? owner.Level : ResolvePartyMemberLevel(owner.EntityId);
+        if (level <= 0) {
+            return true;
+        }
+
+        return level >= requiredLevel;
+    }
+
+    private int ResolveMitigationLearnLevel(MitigationDefinition def) {
+        if (mitigationLearnLevelCache.TryGetValue(def.Id, out var cached)) {
+            return cached;
+        }
+
+        var sheet = Service.DataManager.GetExcelSheet<ActionSheet>();
+        if (sheet == null) {
+            mitigationLearnLevelCache[def.Id] = 0;
+            return 0;
+        }
+
+        var levels = new List<int>();
+
+        if (def.IconActionId != 0) {
+            var level = ResolveActionLearnLevel(sheet, def.IconActionId);
+            if (level > 0) {
+                levels.Add(level);
+            }
+        }
+
+        if (def.TriggerActionIds != null) {
+            foreach (var actionId in def.TriggerActionIds) {
+                if (actionId == 0) {
+                    continue;
+                }
+
+                var level = ResolveActionLearnLevel(sheet, actionId);
+                if (level > 0) {
+                    levels.Add(level);
+                }
+            }
+        }
+
+        var result = levels.Count == 0 ? 0 : levels.Min();
+        mitigationLearnLevelCache[def.Id] = result;
+        return result;
+    }
+
+    private int ResolveActionLearnLevel(ExcelSheet<ActionSheet> sheet, uint actionId) {
+        if (actionLearnLevelCache.TryGetValue(actionId, out var cached)) {
+            return cached;
+        }
+
+        var row = sheet.GetRow(actionId);
+        var level = row.RowId == 0 ? 0 : (int)row.ClassJobLevel;
+        actionLearnLevelCache[actionId] = level;
+        return level;
     }
 
     private void PruneExpired(DateTime nowUtc) {
@@ -626,8 +698,7 @@ public sealed class MitigationState {
     }
 
     private void EnqueueOverwriteAnnouncement(IReadOnlyList<MitigationOverwrite> newlyDetectedOverwrites) {
-        if (!plugin.Configuration.AllowSendingToPartyChat ||
-            !plugin.Configuration.AutoAnnounceOverwritesToPartyChat) {
+        if (!plugin.Configuration.AutoAnnounceOverwritesToPartyChat) {
             return;
         }
 
@@ -646,9 +717,7 @@ public sealed class MitigationState {
     }
 
     private void FlushOverwriteAnnouncements(DateTime nowUtc) {
-        if (!plugin.Configuration.AllowSendingToPartyChat ||
-            !plugin.Configuration.AutoAnnounceOverwritesToPartyChat ||
-            !HasPartyMembersBesidesSelf()) {
+        if (!plugin.Configuration.AutoAnnounceOverwritesToPartyChat || !plugin.ChatSender.CanSend) {
             lock (gate) {
                 pendingOverwriteAnnouncements.Clear();
             }
@@ -670,15 +739,21 @@ public sealed class MitigationState {
             return;
         }
 
-        if (plugin.ChatSender.TrySendPartyMessage(message, out var error)) {
-            lastAutoAnnounceUtc = nowUtc;
-            return;
+        lastAutoAnnounceUtc = nowUtc;
+
+        if (!plugin.ChatSender.TrySendEchoMessage(message, out var echoError)) {
+            Service.PluginLog.Warning(string.IsNullOrWhiteSpace(echoError)
+                ? "自动通报发送失败：未知错误"
+                : $"自动通报发送失败：{echoError}");
         }
 
-        lastAutoAnnounceUtc = nowUtc;
-        Service.PluginLog.Warning(string.IsNullOrWhiteSpace(error)
-            ? "自动通报发送失败：未知错误"
-            : $"自动通报发送失败：{error}");
+        if (plugin.Configuration.AllowSendingToPartyChat && HasPartyMembersBesidesSelf()) {
+            if (!plugin.ChatSender.TrySendPartyMessage(message, out var partyError)) {
+                Service.PluginLog.Warning(string.IsNullOrWhiteSpace(partyError)
+                    ? "自动通报发送到小队失败：未知错误"
+                    : $"自动通报发送到小队失败：{partyError}");
+            }
+        }
     }
 
     private static bool HasPartyMembersBesidesSelf() {

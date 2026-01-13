@@ -13,7 +13,7 @@ public sealed class Configuration : IPluginConfiguration {
     [NonSerialized]
     private IDalamudPluginInterface pluginInterface = null!;
 
-    public int Version { get; set; } = 8;
+    public int Version { get; set; } = 9;
 
     public bool TrackOnlyInInstances { get; set; } = true;
 
@@ -28,7 +28,7 @@ public sealed class Configuration : IPluginConfiguration {
     public int MaxStoredEvents { get; set; } = 20000;
     public int SaveDebounceMilliseconds { get; set; } = 1500;
 
-    public bool AllowSendingToPartyChat { get; set; } = true;
+    public bool AllowSendingToPartyChat { get; set; } = false;
     public bool AutoAnnounceOverwritesToPartyChat { get; set; } = false;
     public bool AutoAnnounceDeathsToPartyChat { get; set; } = false;
 
@@ -84,6 +84,13 @@ public sealed class Configuration : IPluginConfiguration {
             config.Save();
         }
 
+        if (config.Version < 9) {
+            config.AllowSendingToPartyChat = false;
+            config.TryAddDismantleMitigation();
+            config.Version = 9;
+            config.Save();
+        }
+
         return config;
     }
 
@@ -93,6 +100,7 @@ public sealed class Configuration : IPluginConfiguration {
             ["reprisal"] = "Reprisal",
             ["addle"] = "Addle",
             ["feint"] = "Feint",
+            ["dismantle"] = "Dismantle",
             ["troubadour"] = "Troubadour",
             ["tactician"] = "Tactician",
             ["shield_samba"] = "Shield Samba",
@@ -114,6 +122,7 @@ public sealed class Configuration : IPluginConfiguration {
             ["reprisal"] = "雪仇",
             ["addle"] = "昏乱",
             ["feint"] = "牵制",
+            ["dismantle"] = "武装解除",
             ["troubadour"] = "行吟",
             ["tactician"] = "策动",
             ["shield_samba"] = "防守之桑巴",
@@ -141,6 +150,29 @@ public sealed class Configuration : IPluginConfiguration {
                 def.Name = cnName;
             }
         }
+    }
+
+    private void TryAddDismantleMitigation() {
+        if (Mitigations.Exists(m => string.Equals(m.Id, "dismantle", StringComparison.OrdinalIgnoreCase))) {
+            return;
+        }
+
+        if (Mitigations.Exists(m => m.TriggerActionIds != null && m.TriggerActionIds.Contains(2887))) {
+            return;
+        }
+
+        Mitigations.Add(new MitigationDefinition {
+            Id = "dismantle",
+            Name = "武装解除",
+            IconActionId = 2887,
+            TriggerActionIds = new List<uint> { 2887 },
+            DurationSeconds = 10,
+            CooldownSeconds = 120,
+            Category = MitigationCategory.EnemyDebuff,
+            ApplyTo = MitigationApplyTo.Source,
+            Jobs = new List<JobIds> { JobIds.MCH },
+            Enabled = true,
+        });
     }
 
     private void MigrateDefaultMitigationTimingsFromMcp() {

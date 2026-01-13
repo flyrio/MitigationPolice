@@ -38,6 +38,8 @@
 | DamageAmount | uint | 伤害数值 |
 | DamageType | string? | 伤害类型（可空） |
 | IsFatal | bool | 是否致死 |
+| TargetHpBefore | uint | 命中前血量（用于致死详情；0 表示未知） |
+| TargetShieldBefore | uint | 命中前盾量（用于致死详情；0 表示未知） |
 | ActiveMitigations | List\<MitigationContribution> | 命中瞬间已生效的减伤贡献 |
 | MissingMitigations | List\<MissingMitigation> | 命中瞬间可用但未交的减伤候选 |
 

@@ -36,7 +36,7 @@ public unsafe sealed class ChatSender : IDisposable {
     public bool TrySendPartyMessage(string message, out string? error) {
         error = null;
         if (!enabledProvider()) {
-            error = "已在设置中禁用发送小队消息";
+            error = "已在设置中禁用发送聊天消息";
             return false;
         }
 
@@ -54,11 +54,32 @@ public unsafe sealed class ChatSender : IDisposable {
         return TryExecuteCommand($"/p {message}", out error);
     }
 
+    public bool TrySendEchoMessage(string message, out string? error) {
+        error = null;
+        if (!enabledProvider()) {
+            error = "已在设置中禁用发送聊天消息";
+            return false;
+        }
+
+        if (processChatBox == null) {
+            error = lastInitError ?? "聊天发送初始化失败";
+            return false;
+        }
+
+        message = message.Trim();
+        if (string.IsNullOrWhiteSpace(message)) {
+            error = "消息为空";
+            return false;
+        }
+
+        return TryExecuteCommand($"/e {message}", out error);
+    }
+
     public bool TrySendPartyMessages(IEnumerable<string> messages, out string? error) {
         error = null;
 
         if (!enabledProvider()) {
-            error = "已在设置中禁用发送小队消息";
+            error = "已在设置中禁用发送聊天消息";
             return false;
         }
 
@@ -75,6 +96,35 @@ public unsafe sealed class ChatSender : IDisposable {
 
         for (var i = 0; i < list.Count; i++) {
             if (!TrySendPartyMessage(list[i], out var innerError)) {
+                error = $"第 {i + 1} 行发送失败：{innerError ?? "未知错误"}";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public bool TrySendEchoMessages(IEnumerable<string> messages, out string? error) {
+        error = null;
+
+        if (!enabledProvider()) {
+            error = "已在设置中禁用发送聊天消息";
+            return false;
+        }
+
+        if (processChatBox == null) {
+            error = lastInitError ?? "聊天发送初始化失败";
+            return false;
+        }
+
+        var list = messages.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()).ToList();
+        if (list.Count == 0) {
+            error = "消息为空";
+            return false;
+        }
+
+        for (var i = 0; i < list.Count; i++) {
+            if (!TrySendEchoMessage(list[i], out var innerError)) {
                 error = $"第 {i + 1} 行发送失败：{innerError ?? "未知错误"}";
                 return false;
             }

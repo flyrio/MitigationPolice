@@ -93,6 +93,23 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
         ActionEffectHandler.TargetEffects* effectArray,
         GameObjectId* targetEntityIds
     ) {
+        var targetCount = (int)effectHeader->NumTargets;
+        var actionId = effectHeader->SpellId;
+
+        var targets = stackalloc uint[targetCount];
+        for (var i = 0; i < targetCount; i++) {
+            targets[i] = (uint)(targetEntityIds[i] & uint.MaxValue);
+        }
+
+        Dictionary<uint, PreHitVitals>? preVitalsByTarget = null;
+        if (plugin.MitigationState.ShouldCapturePackets && targetCount > 0 && actionId != 0) {
+            try {
+                preVitalsByTarget = CapturePreHitVitals(new ReadOnlySpan<uint>(targets, targetCount));
+            } catch (Exception ex) {
+                Service.PluginLog.Warning(ex, "Failed to capture pre-hit vitals; will continue without death details");
+            }
+        }
+
         processPacketActionEffectHook.Original(casterEntityId, casterPtr, targetPos, effectHeader, effectArray, targetEntityIds);
 
         try {
@@ -100,13 +117,12 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
                 return;
             }
 
-            if (effectHeader->NumTargets == 0) {
+            if (targetCount == 0) {
                 return;
             }
 
             var nowUtc = DateTime.UtcNow;
             var inCombat = Service.Condition[ConditionFlag.InCombat];
-            var actionId = effectHeader->SpellId;
             if (actionId == 0) {
                 return;
             }
@@ -114,16 +130,11 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
             var sourceId = casterEntityId == 0 ? null : (uint?)casterEntityId;
             var sourceName = ResolveSourceName(casterPtr, sourceId);
 
-            var targets = stackalloc uint[(int)effectHeader->NumTargets];
-            for (var i = 0; i < effectHeader->NumTargets; i++) {
-                targets[i] = (uint)(targetEntityIds[i] & uint.MaxValue);
-            }
-
             if (sourceId.HasValue && plugin.MitigationState.IsTrackedActor(sourceId.Value)) {
-                plugin.MitigationState.RecordActionUsage(sourceId.Value, sourceName ?? string.Empty, actionId, new ReadOnlySpan<uint>(targets, (int)effectHeader->NumTargets), nowUtc);
+                plugin.MitigationState.RecordActionUsage(sourceId.Value, sourceName ?? string.Empty, actionId, new ReadOnlySpan<uint>(targets, targetCount), nowUtc);
             }
 
-            for (var i = 0; i < effectHeader->NumTargets; i++) {
+            for (var i = 0; i < targetCount; i++) {
                 var actionTargetId = targets[i];
                 if (actionTargetId == 0) {
                     continue;
@@ -176,6 +187,8 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
                         ActionName = actionName,
                         DamageAmount = amount,
                         DamageType = damageType,
+                        TargetHpBefore = preVitalsByTarget != null && preVitalsByTarget.TryGetValue(actionTargetId, out var vitals) ? vitals.HpBefore : 0,
+                        TargetShieldBefore = preVitalsByTarget != null && preVitalsByTarget.TryGetValue(actionTargetId, out vitals) ? vitals.ShieldBefore : 0,
                         ActiveMitigations = active,
                         MissingMitigations = missing,
                     });
@@ -184,6 +197,49 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
         } catch (Exception ex) {
             Service.PluginLog.Error(ex, "Failed to process action effect");
         }
+    }
+
+    private Dictionary<uint, PreHitVitals> CapturePreHitVitals(ReadOnlySpan<uint> targets) {
+        var result = new Dictionary<uint, PreHitVitals>();
+
+        for (var i = 0; i < targets.Length; i++) {
+            var targetId = targets[i];
+            if (targetId == 0) {
+                continue;
+            }
+
+            if (!plugin.MitigationState.IsTrackedActor(targetId)) {
+                continue;
+            }
+
+            if (!TryResolvePreHitVitals(targetId, out var vitals)) {
+                continue;
+            }
+
+            result[targetId] = vitals;
+        }
+
+        return result;
+    }
+
+    private static bool TryResolvePreHitVitals(uint targetId, out PreHitVitals vitals) {
+        vitals = default;
+
+        var actor = Service.ObjectTable.SearchByEntityId(targetId);
+        if (actor is not ICharacter c) {
+            return false;
+        }
+
+        var hp = (uint)c.CurrentHp;
+        var maxHp = (uint)c.MaxHp;
+
+        var shieldPercent = Math.Clamp((int)c.ShieldPercentage, 0, 100);
+        var shield = maxHp > 0 && shieldPercent > 0
+            ? (uint)Math.Round(maxHp * (shieldPercent / 100f))
+            : 0u;
+
+        vitals = new PreHitVitals(hp, shield);
+        return true;
     }
 
     private void ProcessPacketActorControlDetour(
@@ -232,8 +288,7 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     }
 
     private void EnqueueDeathAnnouncement(uint targetId, DateTime nowUtc) {
-        if (!plugin.Configuration.AllowSendingToPartyChat ||
-            !plugin.Configuration.AutoAnnounceDeathsToPartyChat) {
+        if (!plugin.Configuration.AutoAnnounceDeathsToPartyChat) {
             return;
         }
 
@@ -247,10 +302,7 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     }
 
     private void FlushDeathAnnouncements(DateTime nowUtc) {
-        if (!plugin.Configuration.AllowSendingToPartyChat ||
-            !plugin.Configuration.AutoAnnounceDeathsToPartyChat ||
-            !plugin.ChatSender.CanSend ||
-            !HasPartyMembersBesidesSelf()) {
+        if (!plugin.Configuration.AutoAnnounceDeathsToPartyChat || !plugin.ChatSender.CanSend) {
             lock (deathAnnounceGate) {
                 pendingDeathAnnounces.Clear();
             }
@@ -273,20 +325,25 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
         }
 
         var lines = BuildDeathAnnouncementLines(request.Value.TargetId, request.Value.WhenUtc);
-        if (lines.Count == 0) {
-            lastDeathAnnounceUtc = nowUtc;
-            return;
-        }
-
-        if (plugin.ChatSender.TrySendPartyMessages(lines, out var error)) {
-            lastDeathAnnounceUtc = nowUtc;
-            return;
-        }
-
         lastDeathAnnounceUtc = nowUtc;
-        Service.PluginLog.Warning(string.IsNullOrWhiteSpace(error)
-            ? "自动通报发送失败：未知错误"
-            : $"自动通报发送失败：{error}");
+
+        if (lines.Count == 0) {
+            return;
+        }
+
+        if (!plugin.ChatSender.TrySendEchoMessages(lines, out var echoError)) {
+            Service.PluginLog.Warning(string.IsNullOrWhiteSpace(echoError)
+                ? "自动通报发送失败：未知错误"
+                : $"自动通报发送失败：{echoError}");
+        }
+
+        if (plugin.Configuration.AllowSendingToPartyChat && HasPartyMembersBesidesSelf()) {
+            if (!plugin.ChatSender.TrySendPartyMessages(lines, out var partyError)) {
+                Service.PluginLog.Warning(string.IsNullOrWhiteSpace(partyError)
+                    ? "自动通报发送到小队失败：未知错误"
+                    : $"自动通报发送到小队失败：{partyError}");
+            }
+        }
     }
 
     private List<string> BuildDeathAnnouncementLines(uint targetId, DateTime nowUtc) {
@@ -459,4 +516,6 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     }
 
     private readonly record struct DeathAnnounceRequest(uint TargetId, DateTime WhenUtc);
+
+    private readonly record struct PreHitVitals(uint HpBefore, uint ShieldBefore);
 }

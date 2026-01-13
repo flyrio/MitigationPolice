@@ -77,7 +77,7 @@ public sealed class ConfigWindow : Window {
         }
 
         var includeEnemy = plugin.Configuration.IncludeEnemyMitigations;
-        if (ImGui.Checkbox("追责：敌方减伤(雪仇/病毒/牵制)", ref includeEnemy)) {
+        if (ImGui.Checkbox("追责：敌方减伤（雪仇/昏乱/牵制/武装解除）", ref includeEnemy)) {
             plugin.Configuration.IncludeEnemyMitigations = includeEnemy;
             SaveAndReload();
         }
@@ -101,25 +101,29 @@ public sealed class ConfigWindow : Window {
         }
 
         var allowSend = plugin.Configuration.AllowSendingToPartyChat;
-        if (ImGui.Checkbox("允许发送到小队频道（手动发送/自动通报均需开启）", ref allowSend)) {
+        if (ImGui.Checkbox("同时发送到小队频道（默认仅默语）", ref allowSend)) {
             plugin.Configuration.AllowSendingToPartyChat = allowSend;
             plugin.Configuration.Save();
         }
 
         var autoAnnounce = plugin.Configuration.AutoAnnounceOverwritesToPartyChat;
-        if (ImGui.Checkbox("自动通报：发生冲突减伤（顶掉/覆盖）时发送到小队频道", ref autoAnnounce)) {
+        if (ImGui.Checkbox("自动通报：发生冲突减伤（顶掉/覆盖）时播报", ref autoAnnounce)) {
             plugin.Configuration.AutoAnnounceOverwritesToPartyChat = autoAnnounce;
             plugin.Configuration.Save();
         }
 
         var autoAnnounceDeath = plugin.Configuration.AutoAnnounceDeathsToPartyChat;
-        if (ImGui.Checkbox("自动通报：有人死亡时发送减伤警察信息到小队频道", ref autoAnnounceDeath)) {
+        if (ImGui.Checkbox("自动通报：有人死亡时播报减伤警察信息", ref autoAnnounceDeath)) {
             plugin.Configuration.AutoAnnounceDeathsToPartyChat = autoAnnounceDeath;
             plugin.Configuration.Save();
         }
 
-        if ((autoAnnounce || autoAnnounceDeath) && !plugin.Configuration.AllowSendingToPartyChat) {
-            ImGui.TextDisabled("提示：需先开启“允许发送到小队频道”，否则自动通报不会发送。");
+        if (autoAnnounce || autoAnnounceDeath) {
+            if (!plugin.Configuration.AllowSendingToPartyChat) {
+                ImGui.TextDisabled("提示：自动通报默认发送到默语；如需同步到小队，请开启“同时发送到小队频道”。");
+            } else {
+                ImGui.TextDisabled("提示：已开启同步到小队频道，注意可能刷屏。");
+            }
         }
     }
 

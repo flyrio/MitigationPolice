@@ -455,6 +455,15 @@ public sealed class MainWindow : Window {
 
         ImGui.Text($"{record.SourceName}:{record.ActionName} -> {record.TargetName}");
         ImGui.Text($"伤害: {record.DamageAmount} | 类型: {record.DamageType}");
+        if (record.IsFatal) {
+            if (record.TargetHpBefore == 0 && record.TargetShieldBefore == 0) {
+                ImGui.Text("死亡详情: 生前血量/盾量未知");
+            } else {
+                var total = (ulong)record.TargetHpBefore + (ulong)record.TargetShieldBefore;
+                var overkill = (ulong)record.DamageAmount > total ? (ulong)record.DamageAmount - total : 0UL;
+                ImGui.Text($"死亡详情: 生前血{record.TargetHpBefore} 生前盾{record.TargetShieldBefore} 致死伤害{record.DamageAmount} 过量{overkill}");
+            }
+        }
         ImGui.Separator();
 
         ImGui.Text("已交减伤（命中时仍在持续）");
@@ -585,9 +594,17 @@ public sealed class MainWindow : Window {
         if (!canSend) {
             ImGui.BeginDisabled();
         }
-        if (ImGui.Button("发送到小队")) {
-            if (plugin.ChatSender.TrySendPartyMessages(partyLines, out var err)) {
-                lastSendMessage = $"已发送到小队频道（{partyLines.Count} 行）";
+        if (ImGui.Button("播报（默语）")) {
+            if (plugin.ChatSender.TrySendEchoMessages(partyLines, out var err)) {
+                lastSendMessage = $"已发送到默语（{partyLines.Count} 行）";
+
+                if (plugin.Configuration.AllowSendingToPartyChat && HasPartyMembersBesidesSelf()) {
+                    if (plugin.ChatSender.TrySendPartyMessages(partyLines, out var partyErr)) {
+                        lastSendMessage += "，并已发送到小队频道";
+                    } else {
+                        lastSendMessage += $"，发送到小队失败：{partyErr ?? "未知错误"}";
+                    }
+                }
             } else {
                 lastSendMessage = err ?? "发送失败";
             }
@@ -595,7 +612,7 @@ public sealed class MainWindow : Window {
         if (!canSend) {
             ImGui.EndDisabled();
             if (ImGui.IsItemHovered()) {
-                ImGui.SetTooltip(plugin.ChatSender.LastError ?? "聊天发送不可用（可在设置中启用/禁用）");
+                ImGui.SetTooltip(plugin.ChatSender.LastError ?? "聊天发送不可用");
             }
         }
 
@@ -610,6 +627,26 @@ public sealed class MainWindow : Window {
             ImGui.TextUnformatted(line);
         }
         ImGui.EndChild();
+    }
+
+    private static bool HasPartyMembersBesidesSelf() {
+        var local = Service.ObjectTable.LocalPlayer;
+        if (local == null) {
+            return false;
+        }
+
+        for (var i = 0; i < Service.PartyList.Length; i++) {
+            var member = Service.PartyList[i];
+            if (member?.EntityId is not { } id || id == 0) {
+                continue;
+            }
+
+            if (id != local.EntityId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private readonly record struct MechanicKey(string SourceName, uint ActionId, string ActionName) {

@@ -60,6 +60,18 @@ public static class DefaultMitigationLibrary {
                 Jobs = melee,
                 Enabled = true,
             },
+            new() {
+                Id = "dismantle",
+                Name = "武装解除",
+                IconActionId = 2887,
+                TriggerActionIds = new List<uint> { 2887 },
+                DurationSeconds = 10,
+                CooldownSeconds = 120,
+                Category = MitigationCategory.EnemyDebuff,
+                ApplyTo = MitigationApplyTo.Source,
+                Jobs = new List<JobIds> { JobIds.MCH },
+                Enabled = true,
+            },
 
             new() {
                 Id = "troubadour",

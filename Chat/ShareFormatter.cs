@@ -94,6 +94,10 @@ public static class ShareFormatter {
         var header = FitLine(BuildHeader(record), maxBytesPerLine);
 
         var lines = new List<string> { header };
+        var fatalDetail = BuildFatalDetailLine(record);
+        if (!string.IsNullOrWhiteSpace(fatalDetail)) {
+            lines.Add(FitLine(fatalDetail, maxBytesPerLine));
+        }
         lines.AddRange(BuildActiveLines(record.ActiveMitigations, maxBytesPerLine));
         lines.AddRange(BuildMissingLines(record.MissingMitigations, maxBytesPerLine));
         lines.AddRange(BuildOverwriteLines(overwrites, maxBytesPerLine));
@@ -227,6 +231,22 @@ public static class ShareFormatter {
 
         var fatalPrefix = record.IsFatal ? "致死 " : string.Empty;
         return $"{fatalPrefix}{source}:{action} -> {record.TargetName} 伤害{record.DamageAmount}";
+    }
+
+    private static string? BuildFatalDetailLine(DamageEventRecord record) {
+        if (!record.IsFatal) {
+            return null;
+        }
+
+        var hp = record.TargetHpBefore;
+        var shield = record.TargetShieldBefore;
+        if (hp == 0 && shield == 0) {
+            return $"死亡详情: 生前血/盾未知 | 致死伤害{record.DamageAmount}";
+        }
+
+        var total = (ulong)hp + (ulong)shield;
+        var overkill = (ulong)record.DamageAmount > total ? (ulong)record.DamageAmount - total : 0UL;
+        return $"死亡详情: 生前血{hp} 生前盾{shield} 致死伤害{record.DamageAmount} 过量{overkill}";
     }
 
     private static string BuildActiveLine(IReadOnlyList<MitigationContribution> list, int maxBytes) {

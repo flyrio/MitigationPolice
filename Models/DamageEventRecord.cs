@@ -28,6 +28,9 @@ public sealed class DamageEventRecord {
 
     public bool IsFatal { get; set; }
 
+    public uint TargetHpBefore { get; init; }
+    public uint TargetShieldBefore { get; init; }
+
     public List<MitigationContribution> ActiveMitigations { get; init; } = new();
     public List<MissingMitigation> MissingMitigations { get; init; } = new();
 }
