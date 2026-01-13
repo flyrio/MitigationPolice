@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MitigationPolice.Mitigations;
 using MitigationPolice.Models;
 
 namespace MitigationPolice.Chat;
@@ -49,6 +50,39 @@ public static class ShareFormatter {
         lines.AddRange(body);
         lines.Add(FitLine(SeparatorLine, maxBytes));
         return lines;
+    }
+
+    public static string BuildDeathPoliceTipLine(DamageEventRecord record) {
+        var job = record.TargetJob.ToCnShortName();
+        var name = string.IsNullOrWhiteSpace(record.TargetName) ? record.TargetId.ToString() : record.TargetName;
+
+        var action = string.IsNullOrWhiteSpace(record.ActionName)
+            ? record.ActionId?.ToString() ?? "未知技能"
+            : record.ActionName!;
+
+        var damageType = string.IsNullOrWhiteSpace(record.DamageType) ? "未知" : record.DamageType!;
+        var damage = record.DamageAmount;
+
+        var vitalsKnown = record.TargetHpBefore != 0 || record.TargetShieldBefore != 0;
+        var hpText = vitalsKnown ? record.TargetHpBefore.ToString() : "未知";
+        var shieldText = vitalsKnown ? record.TargetShieldBefore.ToString() : "未知";
+
+        var overkillText = "未知";
+        if (vitalsKnown) {
+            var totalBefore = (ulong)record.TargetHpBefore + (ulong)record.TargetShieldBefore;
+            var overkill = (ulong)damage > totalBefore ? (ulong)damage - totalBefore : 0UL;
+            overkillText = overkill.ToString();
+        }
+
+        var reduction = MitigationReductionLibrary.ComputeDamageReductionPercent(record.ActiveMitigations, record.DamageType);
+        var reductionPercent = (int)Math.Round(reduction * 100, MidpointRounding.AwayFromZero);
+
+        var statuses = FormatActiveStatusNames(record.ActiveMitigations, limit: 10);
+        if (string.IsNullOrWhiteSpace(statuses)) {
+            statuses = "无";
+        }
+
+        return $"{job} {name}被{action} {damage}点{damageType}伤害做掉了！生前血量：{hpText}，生前盾量：{shieldText}，致死伤害：{damage}，过量：{overkillText}，减伤百分比：{reductionPercent}%，状态：{statuses}";
     }
 
     private static string Build(DamageEventRecord record, IReadOnlyList<MitigationOverwrite>? overwrites, int maxBytes) {
@@ -241,6 +275,35 @@ public static class ShareFormatter {
 
         var fatalPrefix = record.IsFatal ? "致死 " : string.Empty;
         return $"{fatalPrefix}{source}:{action} -> {record.TargetName} 伤害{record.DamageAmount}";
+    }
+
+    private static string FormatActiveStatusNames(IReadOnlyList<MitigationContribution> list, int limit) {
+        if (list.Count == 0) {
+            return string.Empty;
+        }
+
+        if (limit < 1) {
+            limit = 1;
+        }
+
+        var orderedUnique = list
+            .OrderByDescending(m => m.RemainingSeconds)
+            .Select(m => m.MitigationName)
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (orderedUnique.Count == 0) {
+            return string.Empty;
+        }
+
+        if (orderedUnique.Count <= limit) {
+            return string.Join(" ", orderedUnique);
+        }
+
+        var picked = orderedUnique.Take(limit).ToList();
+        picked.Add($"…+{Math.Max(0, orderedUnique.Count - limit)}");
+        return string.Join(" ", picked);
     }
 
     private static string? BuildFatalDetailLine(DamageEventRecord record) {

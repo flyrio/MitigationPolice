@@ -56,4 +56,32 @@ public static class JobIdsExtensions {
             _ => "其他",
         };
     }
+
+    public static string ToCnShortName(this JobIds job) {
+        return job switch {
+            JobIds.PLD => "骑士",
+            JobIds.WAR => "战士",
+            JobIds.DRK => "黑骑",
+            JobIds.GNB => "绝枪",
+            JobIds.MNK => "武僧",
+            JobIds.DRG => "龙骑",
+            JobIds.NIN => "忍者",
+            JobIds.SAM => "武士",
+            JobIds.RPR => "钐镰",
+            JobIds.VPR => "蝰蛇",
+            JobIds.BRD => "诗人",
+            JobIds.MCH => "机工",
+            JobIds.DNC => "舞者",
+            JobIds.WHM => "白魔",
+            JobIds.SCH => "学者",
+            JobIds.AST => "占星",
+            JobIds.SGE => "贤者",
+            JobIds.BLM => "黑魔",
+            JobIds.SMN => "召唤",
+            JobIds.RDM => "赤魔",
+            JobIds.PCT => "绘灵",
+            JobIds.BLU => "青魔",
+            _ => "其他",
+        };
+    }
 }

@@ -161,7 +161,7 @@ public static class DefaultMitigationLibrary {
             },
             new() {
                 Id = "expedient",
-                Name = "疾风怒涛之计",
+                Name = "怒涛之计",
                 IconActionId = 25868,
                 TriggerActionIds = new List<uint> { 25868 },
                 DurationSeconds = 20,

@@ -386,15 +386,10 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
         if (record == null) {
             var name = ResolveObjectName(targetId) ?? targetId.ToString();
             var text = $"减伤警察：{name} 死亡（未找到对应受伤事件）";
-            return new List<string> {
-                ShareFormatter.SeparatorLine,
-                Utf8Util.Truncate(text, 480),
-                ShareFormatter.SeparatorLine,
-            };
+            return new List<string> { Utf8Util.Truncate(text, 480) };
         }
 
         record.IsFatal = true;
-        var overwrites = plugin.MitigationState.GetOverwritesForEvent(record);
 
         var prefix = string.Empty;
         if (sessionId.HasValue) {
@@ -405,22 +400,11 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
             }
         }
 
-        var raw = ShareFormatter.BuildPartyLines(record, overwrites, 320);
-        var linesOut = new List<string>(raw.Count);
-        var prefixApplied = false;
-        for (var i = 0; i < raw.Count; i++) {
-            var line = raw[i];
-            if (!prefixApplied && !ShareFormatter.IsSeparatorLine(line) && !string.IsNullOrWhiteSpace(prefix)) {
-                line = prefix + line;
-                prefixApplied = true;
-            } else if (!prefixApplied && !ShareFormatter.IsSeparatorLine(line) && string.IsNullOrWhiteSpace(prefix)) {
-                prefixApplied = true;
-            }
-
-            linesOut.Add(Utf8Util.Truncate(line, 480));
+        var lineOut = ShareFormatter.BuildDeathPoliceTipLine(record);
+        if (!string.IsNullOrWhiteSpace(prefix)) {
+            lineOut = prefix + lineOut;
         }
-
-        return linesOut;
+        return new List<string> { Utf8Util.Truncate(lineOut, 480) };
     }
 
     private static bool HasPartyMembersBesidesSelf() {

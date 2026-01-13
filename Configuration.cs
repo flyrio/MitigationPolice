@@ -13,7 +13,7 @@ public sealed class Configuration : IPluginConfiguration {
     [NonSerialized]
     private IDalamudPluginInterface pluginInterface = null!;
 
-    public int Version { get; set; } = 10;
+    public int Version { get; set; } = 11;
 
     public bool TrackOnlyInInstances { get; set; } = true;
 
@@ -94,6 +94,12 @@ public sealed class Configuration : IPluginConfiguration {
         if (config.Version < 10) {
             config.TryAddHealerMitigations();
             config.Version = 10;
+            config.Save();
+        }
+
+        if (config.Version < 11) {
+            config.MigrateDefaultMitigationDisplayNames();
+            config.Version = 11;
             config.Save();
         }
 
@@ -236,7 +242,7 @@ public sealed class Configuration : IPluginConfiguration {
 
         TryAddMitigationIfMissing(new MitigationDefinition {
             Id = "expedient",
-            Name = "疾风怒涛之计",
+            Name = "怒涛之计",
             IconActionId = 25868,
             TriggerActionIds = new List<uint> { 25868 },
             DurationSeconds = 20,
@@ -311,6 +317,16 @@ public sealed class Configuration : IPluginConfiguration {
             Jobs = new List<JobIds> { JobIds.SGE },
             Enabled = true,
         });
+    }
+
+    private void MigrateDefaultMitigationDisplayNames() {
+        foreach (var def in Mitigations) {
+            if (string.Equals(def.Id, "expedient", StringComparison.OrdinalIgnoreCase)) {
+                if (string.IsNullOrWhiteSpace(def.Name) || string.Equals(def.Name, "疾风怒涛之计", StringComparison.OrdinalIgnoreCase)) {
+                    def.Name = "怒涛之计";
+                }
+            }
+        }
     }
 
     private void TryAddMitigationIfMissing(MitigationDefinition definition) {
