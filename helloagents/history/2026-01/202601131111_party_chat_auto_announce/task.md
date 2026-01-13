@@ -7,4 +7,4 @@
 - [√] 更新插件版本号与 `MitigationPolice.json` 元信息（Author/RepoUrl）。
 - [√] 本地验证：`dotnet build -c Release`。
 - [√] 更新知识库文档与 Changelog（helloagents/）。
-- [ ] 提交并推送到 GitHub，确认 Actions 能更新 `latest` Release 资产。
+- [√] 提交并推送到 GitHub，确认 Actions 能更新 `latest` Release 资产。
