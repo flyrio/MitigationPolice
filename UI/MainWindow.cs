@@ -407,7 +407,7 @@ public sealed class MainWindow : Window {
                 }
 
                 ImGui.TableNextColumn();
-                ImGui.Text($"{e.TargetName} ({e.TargetJob})");
+                ImGui.Text($"{e.TargetName} ({e.TargetJob.ToCnName()})");
 
                 ImGui.TableNextColumn();
                 ImGui.Text(e.DamageAmount.ToString());
@@ -493,7 +493,7 @@ public sealed class MainWindow : Window {
             } else {
                 foreach (var m in missingOther) {
                     var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
                 }
             }
 
@@ -503,7 +503,7 @@ public sealed class MainWindow : Window {
             } else {
                 foreach (var m in missingPersonal) {
                     var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
                 }
             }
 
@@ -514,7 +514,7 @@ public sealed class MainWindow : Window {
             } else {
                 foreach (var m in record.MissingMitigations.OrderByDescending(x => x.AvailableForSeconds)) {
                     var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
                 }
             }
         }

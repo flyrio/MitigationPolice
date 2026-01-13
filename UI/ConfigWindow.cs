@@ -449,7 +449,7 @@ public sealed class ConfigWindow : Window {
                 }
 
                 var selected = jobs.Contains(value);
-                if (ImGui.Checkbox($"{value}", ref selected)) {
+                if (ImGui.Checkbox(value.ToCnName(), ref selected)) {
                     if (selected) {
                         jobs.Add(value);
                     } else {

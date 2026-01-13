@@ -28,3 +28,32 @@ public enum JobIds : uint {
     PCT = 42,
 }
 
+public static class JobIdsExtensions {
+    public static string ToCnName(this JobIds job) {
+        return job switch {
+            JobIds.PLD => "骑士",
+            JobIds.MNK => "武僧",
+            JobIds.WAR => "战士",
+            JobIds.DRG => "龙骑士",
+            JobIds.BRD => "吟游诗人",
+            JobIds.WHM => "白魔法师",
+            JobIds.BLM => "黑魔法师",
+            JobIds.SMN => "召唤师",
+            JobIds.SCH => "学者",
+            JobIds.NIN => "忍者",
+            JobIds.MCH => "机工士",
+            JobIds.DRK => "暗黑骑士",
+            JobIds.AST => "占星术士",
+            JobIds.SAM => "武士",
+            JobIds.RDM => "赤魔法师",
+            JobIds.BLU => "青魔法师",
+            JobIds.GNB => "绝枪战士",
+            JobIds.DNC => "舞者",
+            JobIds.RPR => "钐镰客",
+            JobIds.SGE => "贤者",
+            JobIds.VPR => "蝰蛇剑士",
+            JobIds.PCT => "绘灵法师",
+            _ => "其他",
+        };
+    }
+}

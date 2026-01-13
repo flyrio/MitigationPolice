@@ -2,7 +2,7 @@
   "Author": "flyrio",
   "Name": "减伤警察",
   "InternalName": "MitigationPolice",
-  "AssemblyVersion": "0.1.18.0",
+  "AssemblyVersion": "0.1.19.0",
   "Punchline": "副本内伤害统计与减伤追责",
   "Description": "在副本中按“每场战斗”记录队伍成员受到的伤害事件，归因命中瞬间生效减伤，并推算减伤转好未交的责任人（含转好时长/从开场未交）。支持按战斗回看、按开场时间定位、致死标注与一键复制/发送小队频道。",
   "ApplicableVersion": "any",
