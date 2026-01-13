@@ -13,7 +13,7 @@ public sealed class Configuration : IPluginConfiguration {
     [NonSerialized]
     private IDalamudPluginInterface pluginInterface = null!;
 
-    public int Version { get; set; } = 9;
+    public int Version { get; set; } = 10;
 
     public bool TrackOnlyInInstances { get; set; } = true;
 
@@ -88,6 +88,12 @@ public sealed class Configuration : IPluginConfiguration {
             config.AllowSendingToPartyChat = false;
             config.TryAddDismantleMitigation();
             config.Version = 9;
+            config.Save();
+        }
+
+        if (config.Version < 10) {
+            config.TryAddHealerMitigations();
+            config.Version = 10;
             config.Save();
         }
 
@@ -173,6 +179,158 @@ public sealed class Configuration : IPluginConfiguration {
             Jobs = new List<JobIds> { JobIds.MCH },
             Enabled = true,
         });
+    }
+
+    private void TryAddHealerMitigations() {
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "temperance",
+            Name = "节制",
+            IconActionId = 16536,
+            TriggerActionIds = new List<uint> { 16536 },
+            DurationSeconds = 20,
+            CooldownSeconds = 120,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.WHM },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "aquaveil",
+            Name = "水流幕",
+            IconActionId = 25861,
+            TriggerActionIds = new List<uint> { 25861 },
+            DurationSeconds = 8,
+            CooldownSeconds = 60,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.WHM },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "sacred_soil",
+            Name = "野战治疗阵",
+            IconActionId = 188,
+            TriggerActionIds = new List<uint> { 188 },
+            DurationSeconds = 15,
+            CooldownSeconds = 30,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SCH },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "fey_illumination",
+            Name = "异想的幻光",
+            IconActionId = 805,
+            TriggerActionIds = new List<uint> { 805 },
+            DurationSeconds = 20,
+            CooldownSeconds = 120,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SCH },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "expedient",
+            Name = "疾风怒涛之计",
+            IconActionId = 25868,
+            TriggerActionIds = new List<uint> { 25868 },
+            DurationSeconds = 20,
+            CooldownSeconds = 120,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SCH },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "collective_unconscious",
+            Name = "命运之轮",
+            IconActionId = 3613,
+            TriggerActionIds = new List<uint> { 3613 },
+            DurationSeconds = 10,
+            CooldownSeconds = 60,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.AST },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "exaltation",
+            Name = "擢升",
+            IconActionId = 25873,
+            TriggerActionIds = new List<uint> { 25873 },
+            DurationSeconds = 8,
+            CooldownSeconds = 60,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.AST },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "kerachole",
+            Name = "坚角清汁",
+            IconActionId = 24298,
+            TriggerActionIds = new List<uint> { 24298 },
+            DurationSeconds = 15,
+            CooldownSeconds = 30,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SGE },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "taurochole",
+            Name = "白牛清汁",
+            IconActionId = 24303,
+            TriggerActionIds = new List<uint> { 24303 },
+            DurationSeconds = 15,
+            CooldownSeconds = 45,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SGE },
+            Enabled = true,
+        });
+
+        TryAddMitigationIfMissing(new MitigationDefinition {
+            Id = "holos",
+            Name = "整体论",
+            IconActionId = 24310,
+            TriggerActionIds = new List<uint> { 24310 },
+            DurationSeconds = 20,
+            CooldownSeconds = 120,
+            Category = MitigationCategory.Party,
+            ApplyTo = MitigationApplyTo.Target,
+            Jobs = new List<JobIds> { JobIds.SGE },
+            Enabled = true,
+        });
+    }
+
+    private void TryAddMitigationIfMissing(MitigationDefinition definition) {
+        if (Mitigations.Exists(m => string.Equals(m.Id, definition.Id, StringComparison.OrdinalIgnoreCase))) {
+            return;
+        }
+
+        if (definition.TriggerActionIds != null) {
+            foreach (var actionId in definition.TriggerActionIds) {
+                if (actionId == 0) {
+                    continue;
+                }
+
+                if (Mitigations.Exists(m => m.TriggerActionIds != null && m.TriggerActionIds.Contains(actionId))) {
+                    return;
+                }
+            }
+        }
+
+        Mitigations.Add(definition);
     }
 
     private void MigrateDefaultMitigationTimingsFromMcp() {

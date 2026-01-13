@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
@@ -54,6 +55,9 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     private const int MaxPendingDeathAnnounces = 20;
     private readonly TimeSpan deathAnnounceInterval = TimeSpan.FromSeconds(1);
     private DateTime lastDeathAnnounceUtc = DateTime.MinValue;
+
+    private static readonly object ownerIdCacheGate = new();
+    private static readonly Dictionary<Type, PropertyInfo?> ownerIdPropertyCache = new();
 
     public MitigationEventCapture(MitigationPolicePlugin plugin) {
         this.plugin = plugin;
@@ -130,8 +134,21 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
             var sourceId = casterEntityId == 0 ? null : (uint?)casterEntityId;
             var sourceName = ResolveSourceName(casterPtr, sourceId);
 
-            if (sourceId.HasValue && plugin.MitigationState.IsTrackedActor(sourceId.Value)) {
-                plugin.MitigationState.RecordActionUsage(sourceId.Value, sourceName ?? string.Empty, actionId, new ReadOnlySpan<uint>(targets, targetCount), nowUtc);
+            if (sourceId.HasValue && plugin.MitigationState.IsMitigationTriggerAction(actionId)) {
+                var recordCasterId = sourceId.Value;
+                var recordCasterName = sourceName ?? string.Empty;
+
+                if (!plugin.MitigationState.IsTrackedActor(recordCasterId)) {
+                    var ownerId = TryResolveOwnerId(recordCasterId);
+                    if (ownerId.HasValue && plugin.MitigationState.IsTrackedActor(ownerId.Value)) {
+                        recordCasterId = ownerId.Value;
+                        recordCasterName = ResolveObjectName(ownerId) ?? recordCasterName;
+                    }
+                }
+
+                if (plugin.MitigationState.IsTrackedActor(recordCasterId)) {
+                    plugin.MitigationState.RecordActionUsage(recordCasterId, recordCasterName, actionId, new ReadOnlySpan<uint>(targets, targetCount), nowUtc);
+                }
             }
 
             for (var i = 0; i < targetCount; i++) {
@@ -169,7 +186,7 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
 
                     var (active, missing) = plugin.MitigationState.AnalyzeHit(nowUtc, actionTargetId, sourceId, actionId, amount);
                     if (missing.Count > 0) {
-                        missing.Sort((a, b) => b.AvailableForSeconds.CompareTo(a.AvailableForSeconds));
+                        missing.Sort(CompareMissingMitigations);
                     }
 
                     plugin.EventStore.AddToActiveSession(new DamageEventRecord {
@@ -513,6 +530,53 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
 
     private enum ActorControlCategory : uint {
         Death = 0x06,
+    }
+
+    private static uint? TryResolveOwnerId(uint entityId) {
+        var actor = Service.ObjectTable.SearchByEntityId(entityId);
+        if (actor == null) {
+            return null;
+        }
+
+        try {
+            var type = actor.GetType();
+            PropertyInfo? ownerIdProperty;
+            lock (ownerIdCacheGate) {
+                ownerIdPropertyCache.TryGetValue(type, out ownerIdProperty);
+                if (!ownerIdPropertyCache.ContainsKey(type)) {
+                    ownerIdProperty = type.GetProperty("OwnerId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+                                      type.GetProperty("OwnerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    ownerIdPropertyCache[type] = ownerIdProperty;
+                }
+            }
+
+            if (ownerIdProperty == null) {
+                return null;
+            }
+
+            var value = ownerIdProperty.GetValue(actor);
+            return value switch {
+                uint u when u != 0 => u,
+                ulong ul when ul != 0 => (uint)ul,
+                int i when i > 0 => (uint)i,
+                long l when l > 0 => (uint)l,
+                _ => null,
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    private static int CompareMissingMitigations(MissingMitigation a, MissingMitigation b) {
+        if (a.UsedButNotCovered != b.UsedButNotCovered) {
+            return a.UsedButNotCovered ? -1 : 1;
+        }
+
+        if (a.UsedButNotCovered) {
+            return a.UsedAgoSeconds.CompareTo(b.UsedAgoSeconds);
+        }
+
+        return b.AvailableForSeconds.CompareTo(a.AvailableForSeconds);
     }
 
     private readonly record struct DeathAnnounceRequest(uint TargetId, DateTime WhenUtc);

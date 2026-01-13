@@ -476,9 +476,9 @@ public sealed class MainWindow : Window {
         }
 
         ImGui.Separator();
-        ImGui.Text("缺失减伤（可用未交）");
-        var missingPersonal = record.MissingMitigations.Where(m => IsPersonalMitigation(m.MitigationId)).OrderByDescending(x => x.AvailableForSeconds).ToList();
-        var missingOther = record.MissingMitigations.Where(m => !IsPersonalMitigation(m.MitigationId)).OrderByDescending(x => x.AvailableForSeconds).ToList();
+        ImGui.Text("缺失减伤（可用未交 / 已放未覆盖）");
+        var missingPersonal = OrderMissingForUi(record.MissingMitigations.Where(m => IsPersonalMitigation(m.MitigationId))).ToList();
+        var missingOther = OrderMissingForUi(record.MissingMitigations.Where(m => !IsPersonalMitigation(m.MitigationId))).ToList();
 
         if (ImGui.BeginTable("##mp_missing_split", 2, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.Resizable)) {
             ImGui.TableSetupColumn("缺失团队/敌方");
@@ -492,8 +492,7 @@ public sealed class MainWindow : Window {
                 ImGui.TextDisabled("无");
             } else {
                 foreach (var m in missingOther) {
-                    var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                    ImGui.Text(FormatMissingForUi(m));
                 }
             }
 
@@ -502,8 +501,7 @@ public sealed class MainWindow : Window {
                 ImGui.TextDisabled("无");
             } else {
                 foreach (var m in missingPersonal) {
-                    var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                    ImGui.Text(FormatMissingForUi(m));
                 }
             }
 
@@ -512,9 +510,8 @@ public sealed class MainWindow : Window {
             if (record.MissingMitigations.Count == 0) {
                 ImGui.TextDisabled("无");
             } else {
-                foreach (var m in record.MissingMitigations.OrderByDescending(x => x.AvailableForSeconds)) {
-                    var label = m.NeverUsedSinceDutyStart ? "开场" : "转好";
-                    ImGui.Text($"{m.MitigationName} 责任:{m.OwnerName}({m.OwnerJob.ToCnName()}) {label}:{(int)Math.Round(m.AvailableForSeconds)}s");
+                foreach (var m in OrderMissingForUi(record.MissingMitigations)) {
+                    ImGui.Text(FormatMissingForUi(m));
                 }
             }
         }
@@ -712,6 +709,22 @@ public sealed class MainWindow : Window {
         }
 
         return ordered[^1].Id;
+    }
+
+    private static IEnumerable<MissingMitigation> OrderMissingForUi(IEnumerable<MissingMitigation> source) {
+        return source
+            .OrderBy(x => x.UsedButNotCovered ? 0 : 1)
+            .ThenBy(x => x.UsedButNotCovered ? x.UsedAgoSeconds : float.MaxValue)
+            .ThenByDescending(x => x.UsedButNotCovered ? 0 : x.AvailableForSeconds);
+    }
+
+    private static string FormatMissingForUi(MissingMitigation item) {
+        if (item.UsedButNotCovered) {
+            return $"{item.MitigationName} 责任:{item.OwnerName}({item.OwnerJob.ToCnName()}) 已放{Math.Max(0, (int)Math.Round(item.UsedAgoSeconds))}s未覆盖";
+        }
+
+        var label = item.NeverUsedSinceDutyStart ? "开场" : "转好";
+        return $"{item.MitigationName} 责任:{item.OwnerName}({item.OwnerJob.ToCnName()}) {label}:{Math.Max(0, (int)Math.Round(item.AvailableForSeconds))}s";
     }
 
     private static string FormatOffsetSeconds(double seconds) {

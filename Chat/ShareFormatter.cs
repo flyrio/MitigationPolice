@@ -125,7 +125,7 @@ public static class ShareFormatter {
         }
 
         var lines = new List<string>(list.Count);
-        foreach (var x in list.OrderByDescending(m => m.AvailableForSeconds)) {
+        foreach (var x in OrderMissing(list)) {
             var line = $"未:{x.MitigationName}@{x.OwnerName}({FormatMissingAvailableText(x)})";
             lines.Add(FitLine(line, maxBytesPerLine));
         }
@@ -169,8 +169,7 @@ public static class ShareFormatter {
             return "无";
         }
 
-        var parts = list
-            .OrderByDescending(x => x.AvailableForSeconds)
+        var parts = OrderMissing(list)
             .Take(limit)
             .Select(FormatMissingItem)
             .ToList();
@@ -213,6 +212,10 @@ public static class ShareFormatter {
     }
 
     private static string FormatMissingAvailableText(MissingMitigation item) {
+        if (item.UsedButNotCovered) {
+            return $"已放{FormatSeconds(item.UsedAgoSeconds)}未覆盖";
+        }
+
         var seconds = FormatSeconds(item.AvailableForSeconds);
         return item.NeverUsedSinceDutyStart
             ? $"开场{seconds}未交"
@@ -221,6 +224,13 @@ public static class ShareFormatter {
 
     private static string FormatMissingItem(MissingMitigation item) {
         return $"{item.MitigationName}@{item.OwnerName}({FormatMissingAvailableText(item)})";
+    }
+
+    private static IEnumerable<MissingMitigation> OrderMissing(IReadOnlyList<MissingMitigation> list) {
+        return list
+            .OrderBy(x => x.UsedButNotCovered ? 0 : 1)
+            .ThenBy(x => x.UsedButNotCovered ? x.UsedAgoSeconds : float.MaxValue)
+            .ThenByDescending(x => x.UsedButNotCovered ? 0 : x.AvailableForSeconds);
     }
 
     private static string BuildHeader(DamageEventRecord record) {

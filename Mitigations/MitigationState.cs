@@ -44,11 +44,17 @@ public sealed class MitigationState {
     private const int MaxPendingOverwriteAnnouncements = 50;
 
     private const string ConflictGroupPhysRangedPartyMitigation = "phys_ranged_party_mitigation";
+    private const string ConflictGroupSageChole = "sage_chole";
 
     private static readonly HashSet<uint> PhysRangedPartyMitigationActionIds = new() {
         7405,  // 行吟（吟游诗人）
         16889, // 策动（机工士）
         16012, // 防守之桑巴（舞者）
+    };
+
+    private static readonly HashSet<uint> SageCholeMitigationActionIds = new() {
+        24298, // 坚角清汁
+        24303, // 白牛清汁
     };
 
     private static readonly HashSet<uint> EnemyDebuffDurationUpgradeActionIds = new() {
@@ -170,6 +176,12 @@ public sealed class MitigationState {
     public bool IsTrackedActor(uint entityId) {
         lock (gate) {
             return trackedActorIds.Contains(entityId);
+        }
+    }
+
+    public bool IsMitigationTriggerAction(uint actionId) {
+        lock (gate) {
+            return definitionsByTriggerAction.ContainsKey(actionId);
         }
     }
 
@@ -375,6 +387,22 @@ public sealed class MitigationState {
                     : GetEligibleOwners(def);
 
                 foreach (var owner in owners) {
+                    if (TryGetUsedButNotCovered(def, owner, nowUtc, out var usedAgoSeconds)) {
+                        missing.Add(new MissingMitigation {
+                            MitigationId = def.Id,
+                            MitigationName = ResolveMitigationName(def),
+                            IconActionId = def.IconActionId,
+                            OwnerId = owner.EntityId,
+                            OwnerName = owner.Name,
+                            OwnerJob = owner.Job,
+                            UsedButNotCovered = true,
+                            UsedAgoSeconds = usedAgoSeconds,
+                            NeverUsedSinceDutyStart = false,
+                            AvailableForSeconds = 0,
+                        });
+                        continue;
+                    }
+
                     var availability = GetAvailability(def, owner, nowUtc);
                     if (!availability.IsAvailable) {
                         continue;
@@ -387,6 +415,8 @@ public sealed class MitigationState {
                         OwnerId = owner.EntityId,
                         OwnerName = owner.Name,
                         OwnerJob = owner.Job,
+                        UsedButNotCovered = false,
+                        UsedAgoSeconds = 0,
                         NeverUsedSinceDutyStart = availability.NeverUsedSinceDutyStart,
                         AvailableForSeconds = availability.AvailableForSeconds,
                     });
@@ -493,6 +523,14 @@ public sealed class MitigationState {
             return ConflictGroupPhysRangedPartyMitigation;
         }
 
+        if (def.IconActionId != 0 && SageCholeMitigationActionIds.Contains(def.IconActionId)) {
+            return ConflictGroupSageChole;
+        }
+
+        if (def.TriggerActionIds != null && def.TriggerActionIds.Any(id => SageCholeMitigationActionIds.Contains(id))) {
+            return ConflictGroupSageChole;
+        }
+
         return def.Id;
     }
 
@@ -575,6 +613,32 @@ public sealed class MitigationState {
         }
 
         return Availability.Available(false, (float)(nowUtc - availableSince).TotalSeconds);
+    }
+
+    private bool TryGetUsedButNotCovered(MitigationDefinition def, PartyMemberSnapshot owner, DateTime nowUtc, out float usedAgoSeconds) {
+        usedAgoSeconds = 0;
+
+        var key = new OwnerKey(owner.EntityId, def.Id);
+        OwnerLastUse lastUse;
+        lock (gate) {
+            if (!lastUseByOwner.TryGetValue(key, out lastUse)) {
+                return false;
+            }
+        }
+
+        var level = lastUse.LevelAtUse > 0 ? lastUse.LevelAtUse : owner.Level;
+        var durationSeconds = ResolveDurationSeconds(def, lastUse.ActionId, level);
+        if (durationSeconds <= 0) {
+            return false;
+        }
+
+        var expiresUtc = lastUse.LastUsedUtc.AddSeconds(durationSeconds);
+        if (expiresUtc <= nowUtc) {
+            return false;
+        }
+
+        usedAgoSeconds = (float)(nowUtc - lastUse.LastUsedUtc).TotalSeconds;
+        return true;
     }
 
     private bool IsMitigationLearned(MitigationDefinition def, PartyMemberSnapshot owner) {

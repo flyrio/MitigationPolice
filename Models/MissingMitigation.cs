@@ -10,7 +10,9 @@ public sealed class MissingMitigation {
     public string OwnerName { get; init; } = string.Empty;
     public JobIds OwnerJob { get; init; } = JobIds.OTHER;
 
+    public bool UsedButNotCovered { get; init; }
+    public float UsedAgoSeconds { get; init; }
+
     public bool NeverUsedSinceDutyStart { get; init; }
     public float AvailableForSeconds { get; init; }
 }
-

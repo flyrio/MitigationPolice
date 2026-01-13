@@ -87,6 +87,8 @@
 | IconActionId | uint | 图标 ActionId |
 | OwnerId / OwnerName | uint / string | 减伤拥有者（责任候选） |
 | OwnerJob | JobIds | 拥有者职业 |
+| UsedButNotCovered | bool | 是否为“已放未覆盖”标记（技能已释放但本次目标未覆盖/未生效） |
+| UsedAgoSeconds | float | 已放未覆盖时：距离释放已过的时间（秒） |
 | NeverUsedSinceDutyStart | bool | 从进本后是否从未使用过 |
 | AvailableForSeconds | float | 转好已持续的时间（秒） |
 
