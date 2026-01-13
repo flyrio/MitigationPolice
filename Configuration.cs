@@ -13,7 +13,7 @@ public sealed class Configuration : IPluginConfiguration {
     [NonSerialized]
     private IDalamudPluginInterface pluginInterface = null!;
 
-    public int Version { get; set; } = 7;
+    public int Version { get; set; } = 8;
 
     public bool TrackOnlyInInstances { get; set; } = true;
 
@@ -30,6 +30,7 @@ public sealed class Configuration : IPluginConfiguration {
 
     public bool AllowSendingToPartyChat { get; set; } = true;
     public bool AutoAnnounceOverwritesToPartyChat { get; set; } = false;
+    public bool AutoAnnounceDeathsToPartyChat { get; set; } = false;
 
     public List<MitigationDefinition> Mitigations { get; set; } = new();
 
@@ -74,6 +75,12 @@ public sealed class Configuration : IPluginConfiguration {
         if (config.Version < 7) {
             config.AutoAnnounceOverwritesToPartyChat = false;
             config.Version = 7;
+            config.Save();
+        }
+
+        if (config.Version < 8) {
+            config.AutoAnnounceDeathsToPartyChat = false;
+            config.Version = 8;
             config.Save();
         }
 

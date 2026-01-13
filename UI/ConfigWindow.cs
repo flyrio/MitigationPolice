@@ -111,7 +111,14 @@ public sealed class ConfigWindow : Window {
             plugin.Configuration.AutoAnnounceOverwritesToPartyChat = autoAnnounce;
             plugin.Configuration.Save();
         }
-        if (autoAnnounce && !plugin.Configuration.AllowSendingToPartyChat) {
+
+        var autoAnnounceDeath = plugin.Configuration.AutoAnnounceDeathsToPartyChat;
+        if (ImGui.Checkbox("自动通报：有人死亡时发送减伤警察信息到小队频道", ref autoAnnounceDeath)) {
+            plugin.Configuration.AutoAnnounceDeathsToPartyChat = autoAnnounceDeath;
+            plugin.Configuration.Save();
+        }
+
+        if ((autoAnnounce || autoAnnounceDeath) && !plugin.Configuration.AllowSendingToPartyChat) {
             ImGui.TextDisabled("提示：需先开启“允许发送到小队频道”，否则自动通报不会发送。");
         }
     }

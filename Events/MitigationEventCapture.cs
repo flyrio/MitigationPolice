@@ -1,10 +1,12 @@
 // 本文件负责从网络包中捕获受伤事件与队员减伤施放，并写入事件存储供 UI 复盘使用。
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Hooking;
+using MitigationPolice.Chat;
 using MitigationPolice.Mitigations;
 using MitigationPolice.Models;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -47,6 +49,12 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     private readonly TimeSpan deathDedupWindow = TimeSpan.FromSeconds(2);
     private readonly TimeSpan fatalLookbackWindow = TimeSpan.FromSeconds(3);
 
+    private readonly object deathAnnounceGate = new();
+    private readonly Queue<DeathAnnounceRequest> pendingDeathAnnounces = new();
+    private const int MaxPendingDeathAnnounces = 20;
+    private readonly TimeSpan deathAnnounceInterval = TimeSpan.FromSeconds(1);
+    private DateTime lastDeathAnnounceUtc = DateTime.MinValue;
+
     public MitigationEventCapture(MitigationPolicePlugin plugin) {
         this.plugin = plugin;
 
@@ -74,6 +82,7 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     private void OnFrameworkUpdate(Dalamud.Plugin.Services.IFramework framework) {
         var nowUtc = DateTime.UtcNow;
         plugin.MitigationState.Tick(nowUtc);
+        FlushDeathAnnouncements(nowUtc);
     }
 
     private unsafe void ProcessPacketActionEffectDetour(
@@ -216,9 +225,161 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
             }
 
             plugin.EventStore.TryMarkLatestFatal(entityId, nowUtc, fatalLookbackWindow);
+            EnqueueDeathAnnouncement(entityId, nowUtc);
         } catch (Exception ex) {
             Service.PluginLog.Error(ex, "Failed to process actor control death");
         }
+    }
+
+    private void EnqueueDeathAnnouncement(uint targetId, DateTime nowUtc) {
+        if (!plugin.Configuration.AllowSendingToPartyChat ||
+            !plugin.Configuration.AutoAnnounceDeathsToPartyChat) {
+            return;
+        }
+
+        lock (deathAnnounceGate) {
+            while (pendingDeathAnnounces.Count >= MaxPendingDeathAnnounces) {
+                pendingDeathAnnounces.Dequeue();
+            }
+
+            pendingDeathAnnounces.Enqueue(new DeathAnnounceRequest(targetId, nowUtc));
+        }
+    }
+
+    private void FlushDeathAnnouncements(DateTime nowUtc) {
+        if (!plugin.Configuration.AllowSendingToPartyChat ||
+            !plugin.Configuration.AutoAnnounceDeathsToPartyChat ||
+            !plugin.ChatSender.CanSend ||
+            !HasPartyMembersBesidesSelf()) {
+            lock (deathAnnounceGate) {
+                pendingDeathAnnounces.Clear();
+            }
+            return;
+        }
+
+        if (nowUtc - lastDeathAnnounceUtc < deathAnnounceInterval) {
+            return;
+        }
+
+        DeathAnnounceRequest? request = null;
+        lock (deathAnnounceGate) {
+            if (pendingDeathAnnounces.Count > 0) {
+                request = pendingDeathAnnounces.Dequeue();
+            }
+        }
+
+        if (!request.HasValue) {
+            return;
+        }
+
+        var lines = BuildDeathAnnouncementLines(request.Value.TargetId, request.Value.WhenUtc);
+        if (lines.Count == 0) {
+            lastDeathAnnounceUtc = nowUtc;
+            return;
+        }
+
+        if (plugin.ChatSender.TrySendPartyMessages(lines, out var error)) {
+            lastDeathAnnounceUtc = nowUtc;
+            return;
+        }
+
+        lastDeathAnnounceUtc = nowUtc;
+        Service.PluginLog.Warning(string.IsNullOrWhiteSpace(error)
+            ? "自动通报发送失败：未知错误"
+            : $"自动通报发送失败：{error}");
+    }
+
+    private List<string> BuildDeathAnnouncementLines(uint targetId, DateTime nowUtc) {
+        var sessionId = plugin.EventStore.ActiveSessionId;
+        var nowOffset = new DateTimeOffset(nowUtc, TimeSpan.Zero);
+
+        DamageEventRecord? record = null;
+        if (sessionId.HasValue) {
+            var events = plugin.EventStore.GetSessionEventsSnapshot(sessionId.Value);
+            for (var i = events.Count - 1; i >= 0; i--) {
+                var e = events[i];
+                if (nowOffset - e.TimestampUtc > fatalLookbackWindow) {
+                    break;
+                }
+
+                if (e.TargetId == targetId) {
+                    record = e;
+                    break;
+                }
+            }
+        }
+
+        if (record == null) {
+            var name = ResolveObjectName(targetId) ?? targetId.ToString();
+            var text = $"减伤警察：{name} 死亡（未找到对应受伤事件）";
+            return new List<string> {
+                ShareFormatter.SeparatorLine,
+                Utf8Util.Truncate(text, 480),
+                ShareFormatter.SeparatorLine,
+            };
+        }
+
+        record.IsFatal = true;
+        var overwrites = plugin.MitigationState.GetOverwritesForEvent(record);
+
+        var prefix = string.Empty;
+        if (sessionId.HasValue) {
+            var summary = plugin.EventStore.TryGetSummary(sessionId.Value);
+            if (summary.HasValue) {
+                var seconds = (record.TimestampUtc - summary.Value.StartUtc).TotalSeconds;
+                prefix = $"[T+{FormatShareOffsetSeconds(seconds)}] ";
+            }
+        }
+
+        var raw = ShareFormatter.BuildPartyLines(record, overwrites, 320);
+        var linesOut = new List<string>(raw.Count);
+        var prefixApplied = false;
+        for (var i = 0; i < raw.Count; i++) {
+            var line = raw[i];
+            if (!prefixApplied && !ShareFormatter.IsSeparatorLine(line) && !string.IsNullOrWhiteSpace(prefix)) {
+                line = prefix + line;
+                prefixApplied = true;
+            } else if (!prefixApplied && !ShareFormatter.IsSeparatorLine(line) && string.IsNullOrWhiteSpace(prefix)) {
+                prefixApplied = true;
+            }
+
+            linesOut.Add(Utf8Util.Truncate(line, 480));
+        }
+
+        return linesOut;
+    }
+
+    private static bool HasPartyMembersBesidesSelf() {
+        var local = Service.ObjectTable.LocalPlayer;
+        if (local == null) {
+            return false;
+        }
+
+        for (var i = 0; i < Service.PartyList.Length; i++) {
+            var member = Service.PartyList[i];
+            if (member?.EntityId is not { } id || id == 0) {
+                continue;
+            }
+
+            if (id != local.EntityId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string FormatShareOffsetSeconds(double seconds) {
+        if (seconds < 0) {
+            seconds = 0;
+        }
+
+        var ts = TimeSpan.FromSeconds(seconds);
+        if (ts.TotalMinutes >= 1) {
+            return $"{(int)ts.TotalMinutes}m{ts.Seconds:D2}s";
+        }
+
+        return $"{Math.Max(0, (int)Math.Round(ts.TotalSeconds))}s";
     }
 
     private static uint ResolveDamageAmount(ActionEffectHandler.Effect actionEffect) {
@@ -296,4 +457,6 @@ public unsafe sealed class MitigationEventCapture : IDisposable {
     private enum ActorControlCategory : uint {
         Death = 0x06,
     }
+
+    private readonly record struct DeathAnnounceRequest(uint TargetId, DateTime WhenUtc);
 }

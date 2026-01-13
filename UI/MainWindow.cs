@@ -565,8 +565,13 @@ public sealed class MainWindow : Window {
 
         var rawPartyLines = ShareFormatter.BuildPartyLines(record, overwrites, 320);
         var partyLines = new List<string>(rawPartyLines.Count);
+        var prefixApplied = false;
         for (var i = 0; i < rawPartyLines.Count; i++) {
-            var line = i == 0 ? prefix + rawPartyLines[i] : rawPartyLines[i];
+            var line = rawPartyLines[i];
+            if (!prefixApplied && !ShareFormatter.IsSeparatorLine(line)) {
+                line = prefix + line;
+                prefixApplied = true;
+            }
             partyLines.Add(Utf8Util.Truncate(line, 480));
         }
 

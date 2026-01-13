@@ -7,6 +7,12 @@ using MitigationPolice.Models;
 namespace MitigationPolice.Chat;
 
 public static class ShareFormatter {
+    public const string SeparatorLine = "------------------------------------";
+
+    public static bool IsSeparatorLine(string? line) {
+        return line != null && string.Equals(line, SeparatorLine, StringComparison.Ordinal);
+    }
+
     public static string BuildCopyText(DamageEventRecord record) {
         return Build(record, overwrites: null, maxBytes: int.MaxValue);
     }
@@ -35,7 +41,14 @@ public static class ShareFormatter {
 
     public static IReadOnlyList<string> BuildPartyLines(DamageEventRecord record, IReadOnlyList<MitigationOverwrite>? overwrites, int maxBytesPerLine) {
         var maxBytes = Math.Clamp(maxBytesPerLine, 120, 480);
-        return BuildShareLines(record, overwrites, maxBytes);
+        var body = BuildShareLines(record, overwrites, maxBytes);
+
+        var lines = new List<string>(body.Count + 2) {
+            FitLine(SeparatorLine, maxBytes),
+        };
+        lines.AddRange(body);
+        lines.Add(FitLine(SeparatorLine, maxBytes));
+        return lines;
     }
 
     private static string Build(DamageEventRecord record, IReadOnlyList<MitigationOverwrite>? overwrites, int maxBytes) {
